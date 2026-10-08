@@ -2,10 +2,14 @@
   {
     "title": "article 1",
     "status": "draft",
-    "updated": "2026-10-08 09:22",
+    "updated": "2026-10-08 09:30",
     "sections": [
       {
         "title": "Introduction",
+        "text": ""
+      },
+      {
+        "title": "chapter 2",
         "text": ""
       }
     ]
