@@ -31,7 +31,7 @@ class WritingApp(tk.Tk):
         
 
         self.status = tk.StringVar(value="Welcome!")
-        tk.Label(self, textvariable=self.status, anchor="w", bg="#e8e8e8").pack(
+        tk.Label(self, textvariable=self.status, anchor="w", bg="#fdfdfd").pack(
             side="bottom", fill="x")
 
         self.show("dashboard")
@@ -56,11 +56,11 @@ class WritingApp(tk.Tk):
 
     # ---------- navigation ----------
     def build_nav(self):
-        nav = tk.Frame(self, bg="#000000", width=150)
+        nav = tk.Frame(self, bg="#1D9100", width=150)
         nav.pack(side="left", fill="y")
         nav.pack_propagate(False)
 
-        tk.Label(nav, text="QUILLIAN", bg="#ffffff", fg="white",
+        tk.Label(nav, text="QUILLIAN", bg="#1D9100", fg="white",
                  font=("Helvetica", 16, "bold")).pack(pady=15)
 
         for text, cmd in [("Dashboard", lambda: self.show("dashboard")),
@@ -68,7 +68,7 @@ class WritingApp(tk.Tk):
                           ("Editor", self.go_editor),
                           ("New Article", self.new_article)]:
             tk.Button(nav, text=text, command=cmd, relief="flat",
-                      bg="#FFFFFF", fg="white", activebackground="#000000",
+                      bg="#00720A", fg="white", activebackground="#004100",
                       activeforeground="white", pady=6).pack(fill="x", padx=10, pady=3)
 
         self.content = tk.Frame(self)
