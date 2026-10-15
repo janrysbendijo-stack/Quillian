@@ -16,8 +16,9 @@ def word_count(text):
 class WritingApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        
         self.title("Writer")
-        self.geometry("1000x620")
+        self.geometry("1000x600")
         self.minsize(800, 500)
 
         self.articles = self.load_data()
@@ -29,9 +30,9 @@ class WritingApp(tk.Tk):
         self.build_drafts()
         self.build_editor()
         
-
+        
         self.status = tk.StringVar(value="Welcome!")
-        tk.Label(self, textvariable=self.status, anchor="w", bg="#fdfdfd").pack(
+        tk.Label(self, textvariable=self.status, anchor="w", bg="#ffffff").pack(
             side="bottom", fill="x")
 
         self.show("dashboard")
@@ -56,7 +57,7 @@ class WritingApp(tk.Tk):
 
     # ---------- navigation ----------
     def build_nav(self):
-        nav = tk.Frame(self, bg="#1D9100", width=150)
+        nav = tk.Frame(self, bg="#1D9100", width=200)
         nav.pack(side="left", fill="y")
         nav.pack_propagate(False)
 
@@ -65,10 +66,9 @@ class WritingApp(tk.Tk):
 
         for text, cmd in [("Dashboard", lambda: self.show("dashboard")),
                           ("Drafts", lambda: self.show("drafts")),
-                          ("Editor", self.go_editor),
-                          ("New Article", self.new_article)]:
+                          ("Editor", self.go_editor),]:
             tk.Button(nav, text=text, command=cmd, relief="flat",
-                      bg="#00720A", fg="white", activebackground="#004100",
+                      bg="#12741A", fg="white", activebackground="#009900",
                       activeforeground="white", pady=6).pack(fill="x", padx=10, pady=3)
 
         self.content = tk.Frame(self)
@@ -105,22 +105,21 @@ class WritingApp(tk.Tk):
         stats.pack(fill="x", pady=15)
         for i, (key, label) in enumerate([("total", "Articles"), ("drafts", "Drafts"),
                                           ("published", "Published"), ("words", "Total words")]):
-            box = tk.Frame(stats, bd=1, relief="solid", padx=20, pady=10)
+            box = tk.Frame(stats, bd=1, relief="groove", padx=20, pady=10)
             box.grid(row=0, column=i, padx=6)
             tk.Label(box, textvariable=self.stat_vars[key],
                      font=("Helvetica", 22, "bold")).pack()
             tk.Label(box, text=label).pack()
 
         tk.Label(self.dash_frame, text="Recently edited",
-                 font=("Helvetica", 13, "bold")).pack(anchor="w", pady=(10, 4))
-        self.recent_list = tk.Listbox(self.dash_frame, height=8)
+                 font=("Helvetica", 13, "bold")).pack(anchor="w", pady=(20, 8))
+        self.recent_list = tk.Listbox(self.dash_frame, height=15)
         self.recent_list.pack(fill="x")
         self.recent_list.bind("<Double-Button-1>", lambda e: self.open_recent())
 
         row = tk.Frame(self.dash_frame)
         row.pack(anchor="w", pady=10)
-        tk.Button(row, text="Open Selected", command=self.open_recent).pack(side="left", padx=(0, 6))
-        tk.Button(row, text="New Article", command=self.new_article).pack(side="left")
+
 
     def recent_articles(self):
         return sorted(self.articles, key=lambda a: a["updated"], reverse=True)[:8]
@@ -145,7 +144,7 @@ class WritingApp(tk.Tk):
 
     # ---------- drafts ----------
     def build_drafts(self):
-        self.drafts_frame = tk.Frame(self.content, padx=20, pady=20)
+        self.drafts_frame = tk.Frame(self.content, padx=20, pady=10)
         tk.Label(self.drafts_frame, text="Drafts & Articles",
                  font=("Helvetica", 20, "bold")).pack(anchor="w")
 
@@ -159,7 +158,7 @@ class WritingApp(tk.Tk):
                           ("Open", self.open_selected_draft),
                           ("Toggle Draft/Published", self.toggle_status),
                           ("Delete", self.delete_article)]:
-            tk.Button(row, text=text, command=cmd).pack(side="left", padx=(0, 6))
+            tk.Button(row, relief="groove", text=text, command=cmd).pack(side="left", padx=(0, 6))
 
     def refresh_drafts(self):
         self.drafts_list.delete(0, "end")
@@ -189,7 +188,7 @@ class WritingApp(tk.Tk):
 
     def delete_article(self):
         a = self.selected_article()
-        if a and messagebox.askyesno("Delete", f"Delete '{a['title']}'?"):
+        if a and messagebox.askyesno("Delete", f"Are you sure you want to delete'{a['title']}'?"):
             if a is self.current:
                 self.current = None
                 self.sec_index = None
@@ -201,9 +200,10 @@ class WritingApp(tk.Tk):
     # ---------- editor ----------
     def build_editor(self):
         self.editor_frame = tk.Frame(self.content)
+        
 
         # top bar: title + buttons
-        top = tk.Frame(self.editor_frame, padx=10, pady=8)
+        top = tk.Frame(self.editor_frame, padx=10, pady=8, bg="#7e7e7e")
         top.pack(fill="x")
         tk.Label(top, text="Title:").pack(side="left")
         self.title_var = tk.StringVar()
@@ -345,7 +345,7 @@ class WritingApp(tk.Tk):
         if len(sections) == 1:
             messagebox.showinfo("Delete Section", "An article needs at least one section.")
             return
-        if messagebox.askyesno("Delete Section", f"Delete '{sections[self.sec_index]['title']}'?"):
+        if messagebox.askyesno("Delete Section", f"Are you sure you want to delete '{sections[self.sec_index]['title']}'?"):
             del sections[self.sec_index]
             self.refresh_sections()
             self.sec_index = None
