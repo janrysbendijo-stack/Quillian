@@ -2,20 +2,13 @@
   {
     "title": "Article 1",
     "status": "draft",
-    "updated": "2026-10-15 09:09",
+    "updated": "2026-10-20 06:24",
     "sections": [
-      {
-        "title": "Introduction",
-        "text": "feahfoff fjfofjfpodf \njfidfdf\njfjfpdfjfdffdfsdf efsdf"
-      },
-      {
-        "title": "fds",
-        "text": ""
-      },
       {
         "title": "chapter 1",
         "text": "adfiidf djfkd ndidpc ojdjc "
       }
-    ]
+    ],
+    "archived": true
   }
 ]
