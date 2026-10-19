@@ -1,5 +1,3 @@
-
-
 import json
 import os
 import time
@@ -80,6 +78,15 @@ def word_count(text):
     return len(text.split())
 
 
+def on_item(listbox, event):
+    """True only if the click landed on a real row (not on the blank space below)."""
+    box = listbox.bbox(listbox.nearest(event.y))
+    return bool(box) and box[1] <= event.y <= box[1] + box[3]
+
+
+AUTOSAVE_MS = 30000     # autosave every 30 seconds
+
+
 class WritingApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -89,7 +96,9 @@ class WritingApp(tk.Tk):
         self.minsize(800, 500)
         self.configure(bg=BG)
 
+        self.startup_warning = None
         self.articles = self.load_data()
+        self.last_saved = self.serialize()   # what is currently on disk
         self.current = None        # the article being edited
         self.sec_index = None      # index of the section shown in the editor
 
@@ -106,20 +115,69 @@ class WritingApp(tk.Tk):
 
         self.show("dashboard")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.after(AUTOSAVE_MS, self.autosave)
+        if self.startup_warning:
+            messagebox.showwarning("Quillian", self.startup_warning)
 
     # ---------- data ----------
     def load_data(self):
-        if os.path.exists(DATA_FILE):
+        if not os.path.exists(DATA_FILE):
+            return []
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                raise ValueError("articles file is not a list")
+            return data
+        except (ValueError, OSError):
+            # Never overwrite a damaged file: keep a copy of it first.
+            backup = DATA_FILE.replace(".json", f".damaged-{time.strftime('%Y%m%d-%H%M%S')}.json")
             try:
-                with open(DATA_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
-        return []
+                os.replace(DATA_FILE, backup)
+                self.startup_warning = ("Your articles file could not be read.\n"
+                                        f"A copy was kept as:\n{backup}\n\nStarting empty.")
+            except OSError:
+                self.startup_warning = ("Your articles file could not be read, and a backup "
+                                        "copy could not be made. Saving is disabled to protect it.")
+                self.saving_disabled = True
+            return []
 
-    def save_data(self):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.articles, f, indent=2)
+    saving_disabled = False
+
+    def serialize(self):
+        return json.dumps(self.articles, indent=2)
+
+    def save_data(self, quiet=False):
+        """Write all articles safely (temp file, then swap). Returns True on success."""
+        if self.saving_disabled:
+            return False
+        text = self.serialize()
+        tmp = DATA_FILE + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, DATA_FILE)
+        except OSError as err:
+            if not quiet:
+                messagebox.showerror("Could not save", f"Your work was NOT saved:\n{err}")
+            self.status.set("Could not save! Check the folder is writable.")
+            return False
+        self.last_saved = text
+        return True
+
+    def autosave(self):
+        """Every few seconds, write any unsaved changes to disk."""
+        try:
+            if self.current is not None:
+                self.store_editor()
+                if self.serialize() != self.last_saved:
+                    self.current["updated"] = self.now()
+                    if self.save_data(quiet=True):
+                        self.status.set(f"Autosaved at {time.strftime('%H:%M:%S')}")
+        finally:
+            self.after(AUTOSAVE_MS, self.autosave)
 
     def article_words(self, article):
         return sum(word_count(s["text"]) for s in article["sections"])
@@ -199,9 +257,12 @@ class WritingApp(tk.Tk):
 
         tk.Label(self.dash_frame, text="RECENTLY EDITED", bg=BG, fg=MUTED,
                  font=("Helvetica", 9, "bold")).pack(anchor="w", pady=(0, 8))
+        self.recent_hint = tk.Label(self.dash_frame, bg=BG, fg=MUTED, anchor="w")
+        self.recent_hint.pack(fill="x")
         self.recent_list = make_list(self.dash_frame)
         self.recent_list.pack(fill="both", expand=True)
-        self.recent_list.bind("<Double-Button-1>", lambda e: self.open_recent())
+        self.recent_list.bind("<Double-Button-1>",
+                              lambda e: on_item(self.recent_list, e) and self.open_recent())
 
     def recent_articles(self):
         return sorted(self.active_articles(), key=lambda a: a["updated"], reverse=True)[:8]
@@ -215,6 +276,8 @@ class WritingApp(tk.Tk):
         self.recent_list.delete(0, "end")
         for a in self.recent_articles():
             self.recent_list.insert("end", f"  {a['title']}   -   {a['updated']}")
+        self.recent_hint.config(
+            text="" if active else "No drafts yet. Open Drafts and press New to start writing.")
 
     def open_recent(self):
         sel = self.recent_list.curselection()
@@ -227,9 +290,12 @@ class WritingApp(tk.Tk):
         page_header(self.drafts_frame, "Drafts",
                     "Double-click a draft, or select it and press Editor.")
 
+        self.drafts_hint = tk.Label(self.drafts_frame, bg=BG, fg=MUTED, anchor="w")
+        self.drafts_hint.pack(fill="x")
         self.drafts_list = make_list(self.drafts_frame)
         self.drafts_list.pack(fill="both", expand=True, pady=(0, 14))
-        self.drafts_list.bind("<Double-Button-1>", lambda e: self.open_selected_draft())
+        self.drafts_list.bind("<Double-Button-1>",
+                              lambda e: on_item(self.drafts_list, e) and self.open_selected_draft())
 
         row = tk.Frame(self.drafts_frame, bg=BG)
         row.pack(anchor="w")
@@ -244,6 +310,8 @@ class WritingApp(tk.Tk):
         for a in self.active_articles():
             self.drafts_list.insert(
                 "end", f"  {a['title']}   -   {self.article_words(a)} words   -   {a['updated']}")
+        self.drafts_hint.config(
+            text="" if self.active_articles() else "No drafts yet. Press New to start writing.")
 
     def selected_draft(self):
         sel = self.drafts_list.curselection()
@@ -274,6 +342,8 @@ class WritingApp(tk.Tk):
         page_header(self.archive_frame, "Archive",
                     "Restore a draft to bring it back to Drafts.")
 
+        self.archive_hint = tk.Label(self.archive_frame, bg=BG, fg=MUTED, anchor="w")
+        self.archive_hint.pack(fill="x")
         self.archive_list = make_list(self.archive_frame)
         self.archive_list.pack(fill="both", expand=True, pady=(0, 14))
 
@@ -288,6 +358,8 @@ class WritingApp(tk.Tk):
         for a in self.archived_articles():
             self.archive_list.insert(
                 "end", f"  {a['title']}   -   {self.article_words(a)} words   -   {a['updated']}")
+        self.archive_hint.config(
+            text="" if self.archived_articles() else "The archive is empty.")
 
     def selected_archived(self):
         sel = self.archive_list.curselection()
@@ -433,8 +505,8 @@ class WritingApp(tk.Tk):
 
     def on_section_select(self, event):
         sel = self.sec_list.curselection()
-        if not sel or self.current is None:
-            return
+        if not sel or self.current is None or sel[0] == self.sec_index:
+            return                      # nothing new clicked: keep cursor and undo history
         self.store_editor()
         self.select_section(sel[0])
 
@@ -509,8 +581,8 @@ class WritingApp(tk.Tk):
             return
         self.store_editor()
         self.current["updated"] = self.now()
-        self.save_data()
-        self.status.set(f"Saved to Drafts at {time.strftime('%H:%M:%S')}")
+        if self.save_data():
+            self.status.set(f"Saved to Drafts at {time.strftime('%H:%M:%S')}")
 
     def archive_current_article(self):
         if self.current:
@@ -521,20 +593,27 @@ class WritingApp(tk.Tk):
         if self.current is None:
             return
         self.store_editor()
+        safe_name = "".join(c for c in self.current["title"] if c not in '<>:"/\\|?*').strip()
         path = filedialog.asksaveasfilename(
-            defaultextension=".txt", initialfile=self.current["title"] + ".txt",
+            defaultextension=".txt", initialfile=(safe_name or "article") + ".txt",
             filetypes=[("Text files", "*.txt")])
         if not path:
             return
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(self.current["title"] + "\n" + "=" * len(self.current["title"]) + "\n\n")
-            for s in self.current["sections"]:
-                f.write(s["title"] + "\n" + "-" * len(s["title"]) + "\n" + s["text"] + "\n\n")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.current["title"] + "\n" + "=" * len(self.current["title"]) + "\n\n")
+                for s in self.current["sections"]:
+                    f.write(s["title"] + "\n" + "-" * len(s["title"]) + "\n" + s["text"] + "\n\n")
+        except OSError as err:
+            messagebox.showerror("Export failed", f"Could not write the file:\n{err}")
+            return
         self.status.set(f"Exported to {path}")
 
     def on_close(self):
         self.store_editor()
-        self.save_data()
+        if not self.save_data() and not messagebox.askyesno(
+                "Quit anyway?", "Your latest changes could not be saved. Quit anyway?"):
+            return
         self.destroy()
 
 

@@ -1,14 +1,16 @@
 [
   {
-    "title": "Article 1",
-    "status": "draft",
-    "updated": "2026-10-20 06:24",
+    "title": "ARt1",
+    "updated": "2026-10-20 06:32",
     "sections": [
       {
-        "title": "chapter 1",
-        "text": "adfiidf djfkd ndidpc ojdjc "
+        "title": "Introduction",
+        "text": "dsadasdasd"
+      },
+      {
+        "title": "jyfj",
+        "text": ""
       }
-    ],
-    "archived": true
+    ]
   }
 ]
