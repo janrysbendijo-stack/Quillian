@@ -14,24 +14,44 @@ DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "articles.j
 ACTIVITY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "productivity_log.json")
 
 # ---------- theme ----------
-BG = "#0B0B0B"            # deep black
-NAVBG = "#080808"
-SURFACE = "#141414"
-PANEL = "#1C1C1C"
-BORDER = "#303030"
-NEON = "#39FF14"          # neon green
-NEON_HOVER = "#6BFF4F"
-TEXT = "#EDEDED"
-MUTED = "#8A8A8A"
-DANGER = "#FF5C5C"
-
-# button kinds: (background, text, hover background, hover text)
-KINDS = {
-    "primary":   (NEON, BG, NEON_HOVER, BG),
-    "secondary": (PANEL, TEXT, BORDER, NEON),
-    "danger":    (PANEL, DANGER, "#2A1414", DANGER),
-    "nav":       (NAVBG, MUTED, SURFACE, NEON),
+THEMES = {
+    "dark": {
+        "BG": "#0B0B0B", "NAVBG": "#080808", "SURFACE": "#141414",
+        "PANEL": "#1C1C1C", "BORDER": "#303030", "NEON": "#39FF14",
+        "NEON_HOVER": "#6BFF4F", "TEXT": "#EDEDED", "MUTED": "#8A8A8A",
+        "DANGER": "#FF5C5C", "ODD": "#202020", "SELECTED": "#235B1A",
+        "HEAT1": "#173016", "HEAT2": "#22551A", "HEAT3": "#2E7A20",
+        "MENU_HOVER": "#292929", "DANGER_HOVER": "#2A1414",
+        "TEXT_SELECTION": "#2A6B16",
+    },
+    "light": {
+        "BG": "#F5F7F2", "NAVBG": "#E8ECE4", "SURFACE": "#FFFFFF",
+        "PANEL": "#EDF1E9", "BORDER": "#CCD4C6", "NEON": "#238516",
+        "NEON_HOVER": "#1A6F10", "TEXT": "#20251E", "MUTED": "#657060",
+        "DANGER": "#C93636", "ODD": "#F0F3ED", "SELECTED": "#CFE8C9",
+        "HEAT1": "#E0F0DC", "HEAT2": "#B8DFAF", "HEAT3": "#78BF68",
+        "MENU_HOVER": "#DCE4D7", "DANGER_HOVER": "#F8E4E4",
+        "TEXT_SELECTION": "#CFE8C9",
+    },
 }
+THEME_NAME = "dark"
+
+
+def set_theme_colors(name):
+    global THEME_NAME, BG, NAVBG, SURFACE, PANEL, BORDER, NEON, NEON_HOVER
+    global TEXT, MUTED, DANGER, ODD, SELECTED, HEAT1, HEAT2, HEAT3
+    global MENU_HOVER, DANGER_HOVER, TEXT_SELECTION, KINDS
+    THEME_NAME = name
+    globals().update(THEMES[name])
+    KINDS = {
+        "primary": (NEON, SURFACE, NEON_HOVER, SURFACE),
+        "secondary": (PANEL, TEXT, BORDER, NEON),
+        "danger": (PANEL, DANGER, DANGER_HOVER, DANGER),
+        "nav": (NAVBG, MUTED, SURFACE, NEON),
+    }
+
+
+set_theme_colors(THEME_NAME)
 
 
 class FlatButton(tk.Label):
@@ -91,7 +111,7 @@ def make_document_table(parent, show_sections=False, show_goal=False):
                     font=("Helvetica", 10))
     style.configure("Quillian.Treeview.Heading", background=PANEL, foreground=MUTED,
                     relief="flat", font=("Helvetica", 9, "bold"), padding=(12, 13))
-    style.map("Quillian.Treeview", background=[("selected", "#235B1A")],
+    style.map("Quillian.Treeview", background=[("selected", SELECTED)],
               foreground=[("selected", TEXT)])
     columns = ["number", "title"]
     if show_sections: columns.append("sections")
@@ -129,7 +149,7 @@ def add_table_scrollbar(table, parent):
 
 def set_zebra(table):
     table.tag_configure("even", background=SURFACE)
-    table.tag_configure("odd", background="#202020")
+    table.tag_configure("odd", background=ODD)
 
 
 def table_sort(table, key, reverse=False):
@@ -218,6 +238,7 @@ class WritingApp(tk.Tk):
         self.geometry("1000x760")
         self.minsize(800, 680)
         self.configure(bg=BG)
+        self.theme_name = THEME_NAME
 
         self.startup_warning = None
         self.articles = self.load_data()
@@ -421,8 +442,60 @@ class WritingApp(tk.Tk):
             btn.pack(fill="x", pady=1)
             self.nav_buttons[name] = btn
 
+        self.theme_button = FlatButton(
+            nav, "Light mode", self.toggle_theme, "secondary",
+            anchor="w", padx=24, pady=10)
+        self.theme_button.pack(side="bottom", fill="x", padx=8, pady=16)
+
         self.content = tk.Frame(self, bg=BG)
         self.content.pack(side="right", fill="both", expand=True)
+
+    def toggle_theme(self):
+        old_colors = THEMES[self.theme_name]
+        new_name = "light" if self.theme_name == "dark" else "dark"
+        new_colors = THEMES[new_name]
+        color_map = {old_colors[key]: new_colors[key] for key in old_colors}
+        self.theme_name = new_name
+        set_theme_colors(new_name)
+
+        color_options = (
+            "bg", "background", "fg", "foreground", "activebackground",
+            "activeforeground", "disabledforeground", "highlightbackground",
+            "highlightcolor", "insertbackground", "selectbackground",
+            "selectforeground", "troughcolor",
+        )
+
+        def recolor(widget):
+            for option in color_options:
+                try:
+                    value = widget.cget(option)
+                    if value in color_map:
+                        widget.configure(**{option: color_map[value]})
+                except tk.TclError:
+                    continue
+            if isinstance(widget, FlatButton):
+                widget.paint(False)
+            for child in widget.winfo_children():
+                recolor(child)
+
+        recolor(self)
+        self.theme_button.config(text="Dark mode" if new_name == "light" else "Light mode")
+        style = ttk.Style(self)
+        style.configure("Quillian.Treeview", background=SURFACE,
+                        fieldbackground=SURFACE, foreground=TEXT)
+        style.configure("Quillian.Treeview.Heading", background=PANEL,
+                        foreground=MUTED)
+        style.map("Quillian.Treeview", background=[("selected", SELECTED)],
+                  foreground=[("selected", TEXT)])
+        style.configure("Quillian.Horizontal.TProgressbar", troughcolor=BORDER,
+                        background=NEON, bordercolor=BORDER, lightcolor=NEON,
+                        darkcolor=NEON)
+        for table in (self.recent_list, self.drafts_list, self.archive_list):
+            table.tag_configure("even", background=SURFACE)
+            table.tag_configure("odd", background=ODD)
+        self.refresh_dashboard()
+        self.refresh_drafts()
+        self.refresh_archive()
 
     def show(self, name):
         if name != "editor":
@@ -524,7 +597,7 @@ class WritingApp(tk.Tk):
         legend.pack(side="right")
         tk.Label(legend, text="LESS", bg=BG, fg=MUTED,
                  font=("Helvetica", 8)).pack(side="left", padx=(0, 3))
-        for color in (SURFACE, "#173016", "#22551A", "#2E7A20", NEON):
+        for color in (SURFACE, HEAT1, HEAT2, HEAT3, NEON):
             tk.Label(legend, text=" ", bg=color, width=1).pack(side="left", padx=1)
         tk.Label(legend, text="MORE", bg=BG, fg=MUTED,
                  font=("Helvetica", 8)).pack(side="left", padx=(3, 0))
@@ -563,13 +636,13 @@ class WritingApp(tk.Tk):
                     cell_bg = NEON
                     cell_fg = BG
                 elif words >= 50:
-                    cell_bg = "#2E7A20"
+                    cell_bg = HEAT3
                     cell_fg = TEXT
                 elif words >= 20:
-                    cell_bg = "#22551A"
+                    cell_bg = HEAT2
                     cell_fg = TEXT
                 elif words:
-                    cell_bg = "#173016"
+                    cell_bg = HEAT1
                     cell_fg = TEXT
                 else:
                     cell_bg = SURFACE
@@ -888,7 +961,7 @@ class WritingApp(tk.Tk):
         scroll.pack(side="right", fill="y", padx=(0, 14))
         self.text = tk.Text(right, wrap="word", undo=True, font=("Georgia", 13),
                             bg=SURFACE, fg=TEXT, insertbackground=NEON,
-                            selectbackground="#2A6B16", selectforeground=TEXT,
+                            selectbackground=TEXT_SELECTION, selectforeground=TEXT,
                             relief="flat", bd=0, padx=24, pady=20, spacing3=5,
                             highlightthickness=1, highlightbackground=BORDER,
                             highlightcolor=NEON, yscrollcommand=scroll.set)
