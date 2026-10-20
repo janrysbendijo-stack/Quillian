@@ -1,7 +1,11 @@
 import json
+import re
+import html
+import calendar
 import os
 import time
 import tkinter as tk
+from datetime import date, timedelta
 from tkinter import messagebox, simpledialog, filedialog
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "articles.json")
@@ -101,6 +105,8 @@ class WritingApp(tk.Tk):
         self.last_saved = self.serialize()   # what is currently on disk
         self.current = None        # the article being edited
         self.sec_index = None      # index of the section shown in the editor
+        self.section_text_snapshot = None
+        self.pending_writing_articles = set()
 
         # status bar is packed first so it always stays visible at the bottom
         self.status = tk.StringVar(value="Welcome!")
@@ -115,6 +121,13 @@ class WritingApp(tk.Tk):
 
         self.show("dashboard")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.bind_all("<Control-s>", self.shortcut_save)
+        self.bind_all("<Control-n>", self.shortcut_new)
+        self.bind_all("<Control-f>", self.shortcut_find)
+        self.bind_all("<Control-h>", self.shortcut_replace)
+        self.bind_all("<Control-b>", lambda e: self.format_shortcut("bold"))
+        self.bind_all("<Control-i>", lambda e: self.format_shortcut("italic"))
+        self.bind_all("<Control-u>", lambda e: self.format_shortcut("underline"))
         self.after(AUTOSAVE_MS, self.autosave)
         if self.startup_warning:
             messagebox.showwarning("Quillian", self.startup_warning)
@@ -128,8 +141,21 @@ class WritingApp(tk.Tk):
                 data = json.load(f)
             if not isinstance(data, list):
                 raise ValueError("articles file is not a list")
+            for article in data:
+                if (not isinstance(article, dict)
+                    or not isinstance(article.get("title"), str)
+                    or not isinstance(article.get("updated"), str)
+                    or not isinstance(article.get("sections"), list)
+                    or not article["sections"]
+                    or not isinstance(article.get("archived", False), bool)):
+                    raise ValueError("Invalid article format")
+                for section in article["sections"]:
+                    if (not isinstance(section, dict)
+                        or not isinstance(section.get("title"), str)
+                        or not isinstance(section.get("text"), str)):
+                        raise ValueError("Invalid section format")
             return data
-        except (ValueError, OSError):
+        except (ValueError, OSError, TypeError):
             # Never overwrite a damaged file: keep a copy of it first.
             backup = DATA_FILE.replace(".json", f".damaged-{time.strftime('%Y%m%d-%H%M%S')}.json")
             try:
@@ -151,6 +177,17 @@ class WritingApp(tk.Tk):
         """Write all articles safely (temp file, then swap). Returns True on success."""
         if self.saving_disabled:
             return False
+        pending_ids = set(self.pending_writing_articles)
+        today = date.today().isoformat()
+        for article in self.articles:
+            if id(article) not in pending_ids:
+                continue
+            activity = article.get("writing_activity")
+            if not isinstance(activity, list):
+                activity = []
+            if today not in activity:
+                activity.append(today)
+            article["writing_activity"] = activity
         text = self.serialize()
         tmp = DATA_FILE + ".tmp"
         try:
@@ -165,6 +202,7 @@ class WritingApp(tk.Tk):
             self.status.set("Could not save! Check the folder is writable.")
             return False
         self.last_saved = text
+        self.pending_writing_articles.difference_update(pending_ids)
         return True
 
     def autosave(self):
@@ -237,11 +275,28 @@ class WritingApp(tk.Tk):
 
     # ---------- dashboard ----------
     def build_dashboard(self):
-        self.dash_frame = tk.Frame(self.content, bg=BG, padx=28, pady=24)
-        page_header(self.dash_frame, "Dashboard", "Double-click a draft to keep writing.")
+        self.dash_frame = tk.Frame(self.content, bg=BG)
+        self.dash_scroll = make_scrollbar(self.dash_frame, None)
+        self.dash_canvas = tk.Canvas(self.dash_frame, bg=BG, highlightthickness=0,
+                                     yscrollcommand=self.dash_scroll.set)
+        self.dash_scroll.config(command=self.dash_canvas.yview)
+        self.dash_scroll.pack(side="right", fill="y")
+        self.dash_canvas.pack(side="left", fill="both", expand=True)
+        self.dashboard_content = tk.Frame(self.dash_canvas, bg=BG, padx=28, pady=24)
+        self.dash_content_window = self.dash_canvas.create_window(
+            (0, 0), window=self.dashboard_content, anchor="nw")
+        self.dashboard_content.bind(
+            "<Configure>",
+            lambda e: self.dash_canvas.configure(scrollregion=self.dash_canvas.bbox("all")))
+        self.dash_canvas.bind(
+            "<Configure>",
+            lambda e: self.dash_canvas.itemconfigure(self.dash_content_window, width=e.width))
+        self.bind_all("<MouseWheel>", self.scroll_dashboard, add="+")
+        page_header(self.dashboard_content, "Dashboard",
+                    "Double-click a draft to keep writing.")
 
         self.stat_vars = {k: tk.StringVar() for k in ("drafts", "archived", "words")}
-        stats = tk.Frame(self.dash_frame, bg=BG)
+        stats = tk.Frame(self.dashboard_content, bg=BG)
         stats.pack(fill="x", pady=(6, 20))
         for i, (key, label) in enumerate([("drafts", "DRAFTS"),
                                           ("archived", "ARCHIVED"),
@@ -255,17 +310,123 @@ class WritingApp(tk.Tk):
             tk.Label(box, text=label, bg=SURFACE, fg=MUTED,
                      font=("Helvetica", 9, "bold")).pack(anchor="w")
 
-        tk.Label(self.dash_frame, text="RECENTLY EDITED", bg=BG, fg=MUTED,
+        tk.Label(self.dashboard_content, text="RECENTLY EDITED", bg=BG, fg=MUTED,
                  font=("Helvetica", 9, "bold")).pack(anchor="w", pady=(0, 8))
-        self.recent_hint = tk.Label(self.dash_frame, bg=BG, fg=MUTED, anchor="w")
+        self.recent_hint = tk.Label(self.dashboard_content, bg=BG, fg=MUTED, anchor="w")
         self.recent_hint.pack(fill="x")
-        self.recent_list = make_list(self.dash_frame)
-        self.recent_list.pack(fill="both", expand=True)
+        self.recent_list = make_list(self.dashboard_content)
+        self.recent_list.config(height=8)
+        self.recent_list.pack(fill="x")
         self.recent_list.bind("<Double-Button-1>",
                               lambda e: on_item(self.recent_list, e) and self.open_recent())
 
+        productivity = tk.Frame(self.dashboard_content, bg=BG)
+        productivity.pack(fill="x", pady=(18, 0))
+        productivity_header = tk.Frame(productivity, bg=BG)
+        productivity_header.pack(fill="x", pady=(0, 8))
+        tk.Label(productivity_header, text="PRODUCTIVITY LOG", bg=BG, fg=MUTED,
+                 font=("Helvetica", 9, "bold")).pack(side="left")
+        self.streak_var = tk.StringVar()
+        tk.Label(productivity_header, textvariable=self.streak_var, bg=BG, fg=NEON,
+                 font=("Helvetica", 10, "bold")).pack(side="right")
+
+        month_row = tk.Frame(productivity, bg=BG)
+        month_row.pack(fill="x", pady=(0, 6))
+        FlatButton(month_row, "<", lambda: self.change_log_month(-1),
+                   padx=10, pady=3).pack(side="left")
+        self.log_month_var = tk.StringVar()
+        tk.Label(month_row, textvariable=self.log_month_var, bg=BG, fg=TEXT,
+                 font=("Helvetica", 11, "bold")).pack(side="left", expand=True)
+        self.month_activity_var = tk.StringVar()
+        tk.Label(month_row, textvariable=self.month_activity_var, bg=BG, fg=MUTED,
+                 font=("Helvetica", 9)).pack(side="left", padx=8)
+        FlatButton(month_row, ">", lambda: self.change_log_month(1),
+                   padx=10, pady=3).pack(side="right")
+
+        self.log_month = date.today().replace(day=1)
+        calendar_grid = tk.Frame(productivity, bg=BG)
+        calendar_grid.pack(fill="x")
+        self.log_day_cells = []
+        for column, weekday in enumerate(("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")):
+            calendar_grid.grid_columnconfigure(column, weight=1, uniform="calendar-day")
+            tk.Label(calendar_grid, text=weekday, bg=BG, fg=MUTED,
+                     font=("Helvetica", 8, "bold")).grid(
+                         row=0, column=column, sticky="ew", pady=(0, 3))
+        for row in range(1, 7):
+            cells = []
+            for column in range(7):
+                cell = tk.Label(calendar_grid, text="", bg=PANEL, fg=MUTED,
+                                font=("Helvetica", 9), height=1,
+                                highlightthickness=1, highlightbackground=BORDER)
+                cell.grid(row=row, column=column, sticky="ew", padx=2, pady=2)
+                cells.append(cell)
+            self.log_day_cells.append(cells)
+
+    def scroll_dashboard(self, event):
+        if self.dash_frame.winfo_ismapped():
+            self.dash_canvas.yview_scroll(int(-event.delta / 120), "units")
+            return "break"
+
     def recent_articles(self):
         return sorted(self.active_articles(), key=lambda a: a["updated"], reverse=True)[:8]
+
+    def writing_dates(self):
+        dates = set()
+        for article in self.articles:
+            activity = article.get("writing_activity", [])
+            if not isinstance(activity, list):
+                continue
+            for value in activity:
+                if not isinstance(value, str):
+                    continue
+                try:
+                    dates.add(date.fromisoformat(value))
+                except ValueError:
+                    continue
+        return dates
+
+    def current_writing_streak(self, writing_dates):
+        day = date.today()
+        if day not in writing_dates:
+            day -= timedelta(days=1)
+        streak = 0
+        while day in writing_dates:
+            streak += 1
+            day -= timedelta(days=1)
+        return streak
+
+    def change_log_month(self, offset):
+        month_index = self.log_month.year * 12 + self.log_month.month - 1 + offset
+        year, month = divmod(month_index, 12)
+        self.log_month = date(year, month + 1, 1)
+        self.refresh_productivity_log()
+
+    def refresh_productivity_log(self):
+        writing_dates = self.writing_dates()
+        streak = self.current_writing_streak(writing_dates)
+        self.streak_var.set(f"{streak} day streak")
+
+        year, month = self.log_month.year, self.log_month.month
+        self.log_month_var.set(self.log_month.strftime("%B %Y"))
+        monthly_dates = {day for day in writing_dates
+                         if day.year == year and day.month == month}
+        self.month_activity_var.set(f"{len(monthly_dates)} writing days")
+        weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)
+        weeks.extend([[0] * 7 for _ in range(6 - len(weeks))])
+        today = date.today()
+        for row, week in enumerate(weeks):
+            for column, day_number in enumerate(week):
+                cell = self.log_day_cells[row][column]
+                if not day_number:
+                    cell.config(text="", bg=BG, highlightbackground=BG)
+                    continue
+                day = date(year, month, day_number)
+                active = day in writing_dates
+                cell.config(text=str(day_number),
+                            bg="#173014" if active else PANEL,
+                            fg=NEON if active else TEXT,
+                            font=("Helvetica", 9, "bold" if active else "normal"),
+                            highlightbackground=NEON if day == today else BORDER)
 
     def refresh_dashboard(self):
         active = self.active_articles()
@@ -278,6 +439,7 @@ class WritingApp(tk.Tk):
             self.recent_list.insert("end", f"  {a['title']}   -   {a['updated']}")
         self.recent_hint.config(
             text="" if active else "No drafts yet. Open Drafts and press New to start writing.")
+        self.refresh_productivity_log()
 
     def open_recent(self):
         sel = self.recent_list.curselection()
@@ -290,6 +452,24 @@ class WritingApp(tk.Tk):
         page_header(self.drafts_frame, "Drafts",
                     "Double-click a draft, or select it and press Editor.")
 
+        search_row = tk.Frame(self.drafts_frame, bg=BG)
+        search_row.pack(fill="x", pady=(0, 10))
+        tk.Label(search_row, text="SEARCH", bg=BG, fg=MUTED).pack(side="left", padx=(0, 10))
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *_: self.refresh_drafts())
+        tk.Entry(search_row, textvariable=self.search_var, bg=SURFACE, fg=TEXT,
+                 insertbackground=NEON, relief="flat", font=("Helvetica", 11),
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=NEON).pack(side="left", fill="x", expand=True, ipady=5)
+        tk.Label(search_row, text="SORT", bg=BG, fg=MUTED).pack(side="left", padx=(12, 6))
+        self.sort_var = tk.StringVar(value="Newest")
+        sort_menu = tk.OptionMenu(search_row, self.sort_var, "Newest", "Oldest", "Title A-Z", "Title Z-A")
+        sort_menu.config(bg=PANEL, fg=TEXT, activebackground=BORDER, activeforeground=NEON,
+                         highlightthickness=0, relief="flat", width=11)
+        sort_menu["menu"].config(bg=PANEL, fg=TEXT, activebackground=NEON, activeforeground=BG)
+        sort_menu.pack(side="left")
+        self.sort_var.trace_add("write", lambda *_: self.refresh_drafts())
+        self.visible_drafts = []
         self.drafts_hint = tk.Label(self.drafts_frame, bg=BG, fg=MUTED, anchor="w")
         self.drafts_hint.pack(fill="x")
         self.drafts_list = make_list(self.drafts_frame)
@@ -307,18 +487,33 @@ class WritingApp(tk.Tk):
 
     def refresh_drafts(self):
         self.drafts_list.delete(0, "end")
-        for a in self.active_articles():
+        query = self.search_var.get().strip().casefold()
+        self.visible_drafts = [a for a in self.active_articles()
+                               if query in a["title"].casefold()]
+        mode = self.sort_var.get()
+        if mode == "Newest":
+            self.visible_drafts.sort(key=lambda a: a.get("updated", ""), reverse=True)
+        elif mode == "Oldest":
+            self.visible_drafts.sort(key=lambda a: a.get("updated", ""))
+        elif mode == "Title A-Z":
+            self.visible_drafts.sort(key=lambda a: a["title"].casefold())
+        elif mode == "Title Z-A":
+            self.visible_drafts.sort(key=lambda a: a["title"].casefold(), reverse=True)
+        for a in self.visible_drafts:
             self.drafts_list.insert(
                 "end", f"  {a['title']}   -   {self.article_words(a)} words   -   {a['updated']}")
         self.drafts_hint.config(
-            text="" if self.active_articles() else "No drafts yet. Press New to start writing.")
+            text=("No matching drafts." if query else "No drafts yet. Press New to start writing.")
+            if not self.visible_drafts else "")
 
     def selected_draft(self):
         sel = self.drafts_list.curselection()
         if not sel:
             messagebox.showinfo("Select", "Select a draft first.")
             return None
-        return self.active_articles()[sel[0]]
+        if sel[0] >= len(self.visible_drafts):
+            return None
+        return self.visible_drafts[sel[0]]
 
     def open_selected_draft(self):
         a = self.selected_draft()
@@ -375,9 +570,9 @@ class WritingApp(tk.Tk):
         if article is self.current:         # an archived draft can't stay open
             self.current = None
             self.sec_index = None
-        self.save_data()
-        self.status.set(f"'{article['title']}' moved to the archive.")
-        self.show("archive")
+        if self.save_data():
+            self.status.set(f"'{article['title']}' moved to the archive.")
+            self.show("archive")
 
     def restore_selected_article(self):
         a = self.selected_archived()
@@ -385,9 +580,9 @@ class WritingApp(tk.Tk):
             return
         a["archived"] = False
         a["updated"] = self.now()
-        self.save_data()
-        self.status.set(f"'{a['title']}' restored to Drafts.")
-        self.show("drafts")
+        if self.save_data():
+            self.status.set(f"'{a['title']}' restored to Drafts.")
+            self.show("drafts")
 
     def delete_selected_archived(self):
         a = self.selected_archived()
@@ -404,8 +599,8 @@ class WritingApp(tk.Tk):
             self.current = None
             self.sec_index = None
         self.articles.remove(article)
-        self.save_data()
-        self.status.set("Draft deleted.")
+        if self.save_data():
+            self.status.set("Draft deleted.")
 
     # ---------- editor ----------
     def build_editor(self):
@@ -425,7 +620,15 @@ class WritingApp(tk.Tk):
         FlatButton(top, "Save", self.save_article, "primary").pack(side="left", padx=3)
         FlatButton(top, "Archive", self.archive_current_article).pack(side="left", padx=3)
         FlatButton(top, "Export .txt", self.export_article).pack(side="left", padx=3)
+        FlatButton(top, "Find / Replace", self.open_find_replace).pack(side="left", padx=3)
         tk.Frame(self.editor_frame, bg=NEON, height=1).pack(fill="x")
+        toolbar = tk.Frame(self.editor_frame, bg=SURFACE, padx=12, pady=5)
+        toolbar.pack(fill="x")
+        for name, kind in [("Bold", "bold"), ("Italic", "italic"), ("Underline", "underline"),
+                           ("Left", "left"), ("Center", "center"), ("Right", "right")]:
+            FlatButton(toolbar, name, lambda k=kind: self.apply_format(k)).pack(side="left", padx=3)
+        FlatButton(toolbar, "Grammar Check", self.check_grammar, "primary").pack(side="right", padx=3)
+        FlatButton(toolbar, "Export HTML", self.export_html).pack(side="right", padx=3)
 
         body = tk.Frame(self.editor_frame, bg=BG)
         body.pack(fill="both", expand=True)
@@ -462,9 +665,129 @@ class WritingApp(tk.Tk):
                             relief="flat", bd=0, padx=18, pady=14, spacing3=4,
                             highlightthickness=1, highlightbackground=BORDER,
                             highlightcolor=NEON, yscrollcommand=scroll.set)
+        self.text.tag_configure("bold", font=("Georgia", 13, "bold"))
+        self.text.tag_configure("italic", font=("Georgia", 13, "italic"))
+        self.text.tag_configure("underline", underline=True)
+        self.text.tag_configure("center", justify="center")
+        self.text.tag_configure("right", justify="right")
+        self.text.tag_configure("grammar_issue", underline=True, foreground="#FFB86B")
         self.text.pack(fill="both", expand=True)
         scroll.config(command=self.text.yview)
-        self.text.bind("<KeyRelease>", lambda e: self.update_count())
+        self.text.bind("<<Modified>>", self.on_text_modified)
+
+    def on_text_modified(self, event=None):
+        if self.text.edit_modified():
+            self.update_count()
+            self.text.edit_modified(False)
+
+    def format_shortcut(self, kind):
+        if self.current is not None and self.focus_get() == self.text:
+            self.apply_format(kind)
+        return "break"
+
+    def apply_format(self, kind):
+        if self.current is None:
+            return
+        if kind in ("left", "center", "right"):
+            try:
+                start = self.text.index("sel.first linestart")
+                end = self.text.index("sel.last lineend")
+            except tk.TclError:
+                start = self.text.index("insert linestart")
+                end = self.text.index("insert lineend")
+            end = self.text.index(f"{end}+1c")
+            for tag in ("center", "right"):
+                self.text.tag_remove(tag, start, end)
+            if kind != "left":
+                self.text.tag_add(kind, start, end)
+        else:
+            try:
+                start, end = self.text.index("sel.first"), self.text.index("sel.last")
+            except tk.TclError:
+                self.status.set("Select text before applying Bold, Italic, or Underline.")
+                return
+            if self.text.tag_nextrange(kind, start, end):
+                self.text.tag_remove(kind, start, end)
+            else:
+                self.text.tag_add(kind, start, end)
+        self.status.set("Formatting updated. Save to keep changes.")
+
+    def check_grammar(self):
+        """Offline writing hints, not a comprehensive grammar or spelling engine."""
+        if self.current is None:
+            return
+        content = self.text.get("1.0", "end-1c")
+        self.text.tag_remove("grammar_issue", "1.0", "end")
+        findings = []
+        patterns = [
+            (r"\b([A-Za-z]+)\s+\1\b", "Repeated word", re.I),
+            (r" {2,}", "Extra spaces", 0),
+            (r"\s+([,.!?;:])", "Space before punctuation", 0),
+            (r"\b[aA]\s+(?=[aeiouAEIOU][A-Za-z])", "Consider 'an' before a vowel sound", 0),
+            (r"\b[aA]n\s+(?=[bcdfgjklmnpqrstvwxyzBCDFGJKLMNPQRSTVWXYZ][A-Za-z])", "Check the article 'an'", 0),
+        ]
+        for pattern, message, flags in patterns:
+            for match in re.finditer(pattern, content, flags):
+                findings.append((match.start(), match.end(), message))
+        for match in re.finditer(r"(?:^|[.!?]\s+)([a-z])", content):
+            findings.append((match.start(1), match.end(1), "Sentence may need a capital letter"))
+        for a, b, message in findings:
+            self.text.tag_add("grammar_issue", f"1.0+{a}c", f"1.0+{b}c")
+        if findings:
+            examples = "\n".join(f"• {message}: {content[a:b]!r}" for a, b, message in findings[:12])
+            messagebox.showinfo("Grammar Assistant", f"Found {len(findings)} possible issue(s) in this section.\n\n{examples}\n\nOrange text marks suggestions. Review manually; suggestions may be incorrect.")
+        else:
+            messagebox.showinfo("Grammar Assistant", "No basic writing issues detected. This does not guarantee correct grammar or spelling.")
+
+    def export_html(self):
+        if self.current is None:
+            return
+        self.store_editor()
+        path = filedialog.asksaveasfilename(defaultextension=".html", filetypes=[("HTML documents", "*.html")])
+        if not path:
+            return
+        parts = ["<!DOCTYPE html><html><head><meta charset='utf-8'><title>",
+                 html.escape(self.current["title"]),
+                 "</title></head><body style='font-family:Georgia,serif;max-width:850px;margin:40px auto;line-height:1.6'>",
+                 "<h1>", html.escape(self.current["title"]), "</h1>"]
+        for section in self.current["sections"]:
+            parts.extend(["<h2>", html.escape(section["title"]), "</h2>"])
+            raw = section["text"]
+            fmt = section.get("formatting", {})
+            # Character-wise styling preserves overlapping bold/italic/underline ranges.
+            runs = []
+            for i, char in enumerate(raw):
+                active = []
+                for tag in ("bold", "italic", "underline", "center", "right"):
+                    if any(isinstance(r, list) and len(r) == 2 and r[0] <= i < r[1]
+                           for r in fmt.get(tag, [])):
+                        active.append(tag)
+                runs.append((char, tuple(active)))
+            lines = []
+            for line in "".join(x[0] for x in runs).split("\n"):
+                lines.append(line)
+            offset = 0
+            for line in lines:
+                styles = []
+                for j, char in enumerate(line):
+                    active = runs[offset+j][1] if offset+j < len(runs) else ()
+                    css = []
+                    if "bold" in active: css.append("font-weight:bold")
+                    if "italic" in active: css.append("font-style:italic")
+                    if "underline" in active: css.append("text-decoration:underline")
+                    escaped = html.escape(char)
+                    styles.append(f'<span style="{ ";".join(css) }">{escaped}</span>' if css else escaped)
+                alignment = "right" if any("right" in runs[k][1] for k in range(offset, min(offset+len(line), len(runs)))) else ("center" if any("center" in runs[k][1] for k in range(offset, min(offset+len(line), len(runs)))) else "left")
+                parts.extend([f'<div style="text-align:{alignment};min-height:1.4em">', "".join(styles), "</div>"])
+                offset += len(line) + 1
+        parts.append("</body></html>")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("".join(parts))
+        except OSError as err:
+            messagebox.showerror("Export failed", str(err))
+            return
+        self.status.set(f"Formatted HTML exported: {path}")
 
     def new_article(self):
         title = simpledialog.askstring("New Draft", "Draft title:", parent=self)
@@ -474,8 +797,10 @@ class WritingApp(tk.Tk):
                    "updated": self.now(),
                    "sections": [{"title": "Introduction", "text": ""}]}
         self.articles.append(article)
-        self.save_data()
-        self.open_article(article)
+        if self.save_data():
+            self.open_article(article)
+        else:
+            self.articles.remove(article)
 
     def open_article(self, article):
         self.store_editor()
@@ -501,6 +826,20 @@ class WritingApp(tk.Tk):
         self.text.delete("1.0", "end")
         self.text.insert("1.0", section["text"])
         self.text.edit_reset()
+        self.section_text_snapshot = section["text"]
+        for tag, ranges in section.get("formatting", {}).items():
+            if tag not in ("bold", "italic", "underline", "center", "right") or not isinstance(ranges, list):
+                continue
+            for pair in ranges:
+                if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                    continue
+                try:
+                    a, b = int(pair[0]), int(pair[1])
+                    if 0 <= a < b <= len(section["text"]):
+                        self.text.tag_add(tag, f"1.0+{a}c", f"1.0+{b}c")
+                except (ValueError, TypeError, tk.TclError):
+                    continue
+        self.text.edit_modified(False)
         self.update_count()
 
     def on_section_select(self, event):
@@ -515,7 +854,20 @@ class WritingApp(tk.Tk):
         if self.current is None or self.sec_index is None:
             return
         if self.sec_index < len(self.current["sections"]):
-            self.current["sections"][self.sec_index]["text"] = self.text.get("1.0", "end-1c")
+            section = self.current["sections"][self.sec_index]
+            text = self.text.get("1.0", "end-1c")
+            if text != self.section_text_snapshot and text.strip():
+                self.pending_writing_articles.add(id(self.current))
+            section["text"] = text
+            self.section_text_snapshot = text
+            formatting = {}
+            for tag in ("bold", "italic", "underline", "center", "right"):
+                positions = self.text.tag_ranges(tag)
+                if positions:
+                    formatting[tag] = [[len(self.text.get("1.0", str(positions[i]))),
+                                        len(self.text.get("1.0", str(positions[i+1])))]
+                                       for i in range(0, len(positions), 2)]
+            section["formatting"] = formatting
         self.current["title"] = self.title_var.get().strip() or "Untitled"
 
     def update_count(self):
@@ -570,6 +922,7 @@ class WritingApp(tk.Tk):
         if messagebox.askyesno(
                 "Delete Section",
                 f"Are you sure you want to delete '{sections[self.sec_index]['title']}'?"):
+            self.store_editor()
             del sections[self.sec_index]
             self.refresh_sections()
             self.sec_index = None
@@ -608,6 +961,125 @@ class WritingApp(tk.Tk):
             messagebox.showerror("Export failed", f"Could not write the file:\n{err}")
             return
         self.status.set(f"Exported to {path}")
+
+    # ---------- shortcuts and find/replace ----------
+    def shortcut_save(self, event=None):
+        if self.current is not None:
+            self.save_article()
+        return "break"
+
+    def shortcut_new(self, event=None):
+        self.new_article()
+        return "break"
+
+    def shortcut_find(self, event=None):
+        if self.current is not None:
+            self.open_find_replace()
+            self.find_entry.focus_set()
+        return "break"
+
+    def shortcut_replace(self, event=None):
+        if self.current is not None:
+            self.open_find_replace()
+            self.replace_entry.focus_set()
+        return "break"
+
+    def open_find_replace(self):
+        if self.current is None:
+            return
+        if hasattr(self, "find_window") and self.find_window.winfo_exists():
+            self.find_window.lift()
+            return
+        win = tk.Toplevel(self)
+        self.find_window = win
+        win.title("Find and Replace - Current Section")
+        win.geometry("460x230")
+        win.resizable(False, False)
+        win.configure(bg=BG)
+        win.transient(self)
+        self.find_var = tk.StringVar()
+        self.replace_var = tk.StringVar()
+        for label, variable in (("Find", self.find_var), ("Replace with", self.replace_var)):
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill="x", padx=16, pady=(12, 0))
+            tk.Label(row, text=label, bg=BG, fg=TEXT, width=13, anchor="w").pack(side="left")
+            entry = tk.Entry(row, textvariable=variable, bg=SURFACE, fg=TEXT,
+                             insertbackground=NEON, relief="flat", font=("Helvetica", 11))
+            entry.pack(side="left", fill="x", expand=True, ipady=5)
+            if label == "Find":
+                self.find_entry = entry
+            else:
+                self.replace_entry = entry
+        self.find_info = tk.StringVar(value="Searches the currently open section (case-insensitive).")
+        tk.Label(win, textvariable=self.find_info, bg=BG, fg=MUTED,
+                 wraplength=430).pack(padx=16, pady=12)
+        buttons = tk.Frame(win, bg=BG)
+        buttons.pack(padx=16, fill="x")
+        FlatButton(buttons, "Find Next", self.find_next, "primary").pack(side="left", padx=(0, 6))
+        FlatButton(buttons, "Replace", self.replace_one).pack(side="left", padx=(0, 6))
+        FlatButton(buttons, "Replace All", self.replace_all).pack(side="left")
+        self.find_entry.focus_set()
+        self.find_entry.bind("<Return>", lambda e: self.find_next())
+
+    def find_next(self):
+        term = self.find_var.get()
+        if not term:
+            self.find_info.set("Enter a word or phrase to find.")
+            return
+        start = self.text.index("insert")
+        idx = self.text.search(term, start, stopindex="end", nocase=True)
+        if not idx:
+            idx = self.text.search(term, "1.0", stopindex="end", nocase=True)
+        if not idx:
+            self.find_info.set("No matches in this section.")
+            return
+        end = self.text.index(f"{idx}+{len(term)}c")
+        self.text.tag_remove("sel", "1.0", "end")
+        self.text.tag_add("sel", idx, end)
+        self.text.mark_set("insert", end)
+        self.text.see(idx)
+        self.text.focus_set()
+        self.find_info.set("Match found.")
+
+    def replace_one(self):
+        term = self.find_var.get()
+        if not term:
+            self.find_info.set("Enter a word or phrase to replace.")
+            return
+        selected = self.text.tag_ranges("sel")
+        if selected and self.text.get(selected[0], selected[1]).casefold() == term.casefold():
+            start, end = str(selected[0]), str(selected[1])
+        else:
+            self.find_next()
+            selected = self.text.tag_ranges("sel")
+            if not selected or self.text.get(selected[0], selected[1]).casefold() != term.casefold():
+                return
+            start, end = str(selected[0]), str(selected[1])
+        self.text.delete(start, end)
+        self.text.insert(start, self.replace_var.get())
+        self.text.mark_set("insert", f"{start}+{len(self.replace_var.get())}c")
+        self.update_count()
+        self.find_info.set("Replaced one match.")
+
+    def replace_all(self):
+        term = self.find_var.get()
+        if not term:
+            self.find_info.set("Enter a word or phrase to replace.")
+            return
+        count = 0
+        cursor = "1.0"
+        while True:
+            idx = self.text.search(term, cursor, stopindex="end", nocase=True)
+            if not idx:
+                break
+            end = self.text.index(f"{idx}+{len(term)}c")
+            self.text.delete(idx, end)
+            replacement = self.replace_var.get()
+            self.text.insert(idx, replacement)
+            cursor = self.text.index(f"{idx}+{len(replacement)}c")
+            count += 1
+        self.update_count()
+        self.find_info.set(f"Replaced {count} match(es) in this section.")
 
     def on_close(self):
         self.store_editor()
