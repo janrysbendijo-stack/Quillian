@@ -1,0 +1,90 @@
+[
+  {
+    "timestamp": "2026-10-21 06:15:58",
+    "article_id": "20df111fc3fa4fc6932cdcccc9378d45",
+    "title": "ARt1",
+    "action": "Autosave",
+    "words": 9,
+    "delta": 0
+  },
+  {
+    "timestamp": "2026-10-21 06:16:28",
+    "article_id": "20df111fc3fa4fc6932cdcccc9378d45",
+    "title": "ARt1",
+    "action": "Autosave",
+    "words": 10,
+    "delta": 1
+  },
+  {
+    "timestamp": "2026-10-21 06:16:58",
+    "article_id": "20df111fc3fa4fc6932cdcccc9378d45",
+    "title": "ARt1",
+    "action": "Autosave",
+    "words": 9,
+    "delta": -1
+  },
+  {
+    "timestamp": "2026-10-21 06:20:45",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Create",
+    "words": 0,
+    "delta": 0
+  },
+  {
+    "timestamp": "2026-10-21 06:20:58",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Autosave",
+    "words": 0,
+    "delta": 0
+  },
+  {
+    "timestamp": "2026-10-21 06:21:19",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Save",
+    "words": 9,
+    "delta": 9
+  },
+  {
+    "timestamp": "2026-10-21 06:21:58",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Autosave",
+    "words": 9,
+    "delta": 0
+  },
+  {
+    "timestamp": "2026-10-21 06:22:28",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Autosave",
+    "words": 9,
+    "delta": 0
+  },
+  {
+    "timestamp": "2026-10-21 06:22:58",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Autosave",
+    "words": 15,
+    "delta": 6
+  },
+  {
+    "timestamp": "2026-10-21 06:23:21",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Archive",
+    "words": 15,
+    "delta": 0
+  },
+  {
+    "timestamp": "2026-10-21 06:23:35",
+    "article_id": "3c4b46307223468394aeda5758a1d539",
+    "title": "Article 1",
+    "action": "Restore",
+    "words": 15,
+    "delta": 0
+  }
+]

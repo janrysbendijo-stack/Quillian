@@ -1,7 +1,7 @@
 [
   {
     "title": "ARt1",
-    "updated": "2026-10-20 21:04",
+    "updated": "2026-10-21 06:16",
     "sections": [
       {
         "title": "Introduction",
@@ -10,7 +10,8 @@
       },
       {
         "title": "jyfj",
-        "text": ""
+        "text": "",
+        "formatting": {}
       }
     ],
     "writing_activity": [
@@ -29,5 +30,43 @@
       }
     ],
     "id": "d4bdd4e1b11d4948baaade4b5a14b8c4"
+  },
+  {
+    "title": "Article 1",
+    "updated": "2026-10-21 06:23",
+    "sections": [
+      {
+        "title": "Introduction",
+        "text": "The quick brown fox jumps over the lazy dog",
+        "formatting": {
+          "right": [
+            [
+              0,
+              44
+            ]
+          ]
+        }
+      },
+      {
+        "title": "Chapter 1",
+        "text": "Peter piper picked a pickled pepper",
+        "formatting": {}
+      }
+    ],
+    "id": "3c4b46307223468394aeda5758a1d539",
+    "history": [
+      {
+        "date": "2026-10-21 06:21",
+        "title": "Article 1",
+        "sections": [
+          {
+            "title": "Introduction",
+            "text": "The quick brown fox jumps over the lazy dog",
+            "formatting": {}
+          }
+        ]
+      }
+    ],
+    "archived": false
   }
 ]
