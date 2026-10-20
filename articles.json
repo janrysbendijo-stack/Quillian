@@ -1,17 +1,20 @@
 [
   {
     "title": "ARt1",
-    "updated": "2026-10-20 20:02",
+    "updated": "2026-10-20 21:04",
     "sections": [
       {
         "title": "Introduction",
-        "text": "",
+        "text": "The quick brown fox jumps over the lazy dog",
         "formatting": {}
       },
       {
         "title": "jyfj",
         "text": ""
       }
+    ],
+    "writing_activity": [
+      "2026-10-20"
     ]
   },
   {

@@ -1,21 +1,24 @@
 import json
+import copy
+import shutil
 import re
 import html
-import calendar
 import os
 import time
-import tkinter as tk
+import calendar
 from datetime import date, timedelta
-from tkinter import messagebox, simpledialog, filedialog
+import tkinter as tk
+from tkinter import messagebox, simpledialog, filedialog, ttk
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "articles.json")
+ACTIVITY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "productivity_log.json")
 
 # ---------- theme ----------
 BG = "#0B0B0B"            # deep black
 NAVBG = "#080808"
 SURFACE = "#141414"
 PANEL = "#1C1C1C"
-BORDER = "#262626"
+BORDER = "#303030"
 NEON = "#39FF14"          # neon green
 NEON_HOVER = "#6BFF4F"
 TEXT = "#EDEDED"
@@ -38,7 +41,7 @@ class FlatButton(tk.Label):
         self.kind = kind
         self.command = command
         self.active = False
-        options = dict(font=("Helvetica", 10, "bold"), padx=14, pady=7, cursor="hand2")
+        options = dict(font=("Helvetica", 10, "bold"), padx=15, pady=9, cursor="hand2")
         options.update(kw)
         super().__init__(parent, text=text, bg=KINDS[kind][0], fg=KINDS[kind][1], **options)
         self.bind("<Enter>", lambda e: self.paint(True))
@@ -70,9 +73,93 @@ def make_scrollbar(parent, command):
                         highlightthickness=0, width=10)
 
 
+def display_date(value):
+    """Show stored YYYY-MM-DD HH:MM timestamps in a readable local format."""
+    try:
+        return time.strftime("%b %d, %Y  •  %I:%M %p",
+                             time.strptime(value, "%Y-%m-%d %H:%M"))
+    except (ValueError, TypeError, OverflowError):
+        return str(value)
+
+
+def make_document_table(parent, show_sections=False, show_goal=False):
+    """Consistent numbered document tables, with section count on Dashboard."""
+    style = ttk.Style(parent)
+    style.theme_use("clam")
+    style.configure("Quillian.Treeview", background=SURFACE, fieldbackground=SURFACE,
+                    foreground=TEXT, borderwidth=0, relief="flat", rowheight=43,
+                    font=("Helvetica", 10))
+    style.configure("Quillian.Treeview.Heading", background=PANEL, foreground=MUTED,
+                    relief="flat", font=("Helvetica", 9, "bold"), padding=(12, 13))
+    style.map("Quillian.Treeview", background=[("selected", "#235B1A")],
+              foreground=[("selected", TEXT)])
+    columns = ["number", "title"]
+    if show_sections: columns.append("sections")
+    columns.append("words")
+    if show_goal: columns.append("goal")
+    columns.append("modified")
+    table = ttk.Treeview(parent, columns=columns, show="headings",
+                         selectmode="browse", style="Quillian.Treeview")
+    # WORDS and LAST MODIFIED are both centered so the number no longer
+    # sits right next to (and looks merged with) the date.
+    config = {
+        "number": ("NO.", 65, False, "center"),
+        "title": ("TITLE", 280, True, "w"),
+        "sections": ("SECTIONS", 110, False, "center"),
+        "words": ("WORDS", 110, False, "center"),
+        "goal": ("WORD GOAL", 125, False, "center"),
+        "modified": ("LAST MODIFIED", 250, False, "center"),
+    }
+    for col in columns:
+        heading, width, stretch, anchor = config[col]
+        table.heading(col, text=heading, anchor=anchor)
+        table.column(col, width=width, minwidth=55, stretch=stretch, anchor=anchor)
+    table.configure(takefocus=True)
+    for col in columns:
+        table.heading(col, command=lambda c=col: table_sort(table, c))
+    return table
+
+
+def add_table_scrollbar(table, parent):
+    bar = make_scrollbar(parent, table.yview)
+    bar.pack(side="right", fill="y")
+    table.configure(yscrollcommand=bar.set)
+    return bar
+
+
+def set_zebra(table):
+    table.tag_configure("even", background=SURFACE)
+    table.tag_configure("odd", background="#202020")
+
+
+def table_sort(table, key, reverse=False):
+    entries = [(table.set(iid, key), iid) for iid in table.get_children("")]
+    if key in ("number", "sections", "words"):
+        entries.sort(key=lambda item: int(item[0] or 0), reverse=reverse)
+    elif key == "goal":
+        entries.sort(key=lambda item: int(item[0].split("/")[0]) if "/" in item[0] else 0, reverse=reverse)
+    elif key == "modified":
+        def parsed(item):
+            try: return time.strptime(item[0], "%b %d, %Y  •  %I:%M %p")
+            except ValueError: return time.strptime("Jan 01, 1970  •  12:00 AM", "%b %d, %Y  •  %I:%M %p")
+        entries.sort(key=parsed, reverse=reverse)
+    else:
+        entries.sort(key=lambda item: item[0].casefold(), reverse=reverse)
+    for index, (_, iid) in enumerate(entries):
+        table.move(iid, "", index)
+        table.item(iid, tags=("even" if index % 2 == 0 else "odd",))
+    for column in table["columns"]:
+        table.heading(column, command=lambda c=column: table_sort(table, c, c == key and not reverse))
+
+
+def table_selected_index(table):
+    selected = table.selection()
+    return int(selected[0]) if selected else None
+
+
 def page_header(parent, title, subtitle=""):
     tk.Label(parent, text=title, bg=BG, fg=TEXT,
-             font=("Helvetica", 22, "bold")).pack(anchor="w")
+             font=("Helvetica", 24, "bold")).pack(anchor="w")
     tk.Frame(parent, bg=NEON, height=3, width=48).pack(anchor="w", pady=(6, 6))
     if subtitle:
         tk.Label(parent, text=subtitle, bg=BG, fg=MUTED).pack(anchor="w", pady=(0, 8))
@@ -80,6 +167,38 @@ def page_header(parent, title, subtitle=""):
 
 def word_count(text):
     return len(text.split())
+
+
+def activity_words_by_day(events):
+    words_by_day = {}
+    for event in events:
+        try:
+            activity_day = date.fromisoformat(str(event["timestamp"])[:10])
+            words = int(event.get("delta", event.get("words", 0)))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if words > 0:
+            words_by_day[activity_day] = words_by_day.get(activity_day, 0) + words
+    return words_by_day
+
+
+def writing_streaks(words_by_day, today):
+    active_days = {day for day, words in words_by_day.items()
+                   if words > 0 and day <= today}
+    current_day = today if today in active_days else today - timedelta(days=1)
+    current = 0
+    while current_day in active_days:
+        current += 1
+        current_day -= timedelta(days=1)
+
+    best = 0
+    streak = 0
+    previous_day = None
+    for active_day in sorted(active_days):
+        streak = streak + 1 if previous_day == active_day - timedelta(days=1) else 1
+        best = max(best, streak)
+        previous_day = active_day
+    return current, best, active_days
 
 
 def on_item(listbox, event):
@@ -96,17 +215,22 @@ class WritingApp(tk.Tk):
         super().__init__()
 
         self.title("Quillian")
-        self.geometry("1000x620")
-        self.minsize(800, 500)
+        self.geometry("1000x760")
+        self.minsize(800, 680)
         self.configure(bg=BG)
 
         self.startup_warning = None
         self.articles = self.load_data()
+        self.activity_log = self.load_activity_log()
+        self.activity_word_baseline = {}
+        for event in self.activity_log:
+            if "article_id" in event and "words" in event:
+                self.activity_word_baseline[event["article_id"]] = int(event["words"])
         self.last_saved = self.serialize()   # what is currently on disk
         self.current = None        # the article being edited
+        for article in self.articles:
+            self.ensure_article_id(article)
         self.sec_index = None      # index of the section shown in the editor
-        self.section_text_snapshot = None
-        self.pending_writing_articles = set()
 
         # status bar is packed first so it always stays visible at the bottom
         self.status = tk.StringVar(value="Welcome!")
@@ -170,6 +294,65 @@ class WritingApp(tk.Tk):
 
     saving_disabled = False
 
+    def load_activity_log(self):
+        if not os.path.exists(ACTIVITY_FILE):
+            return []
+        try:
+            with open(ACTIVITY_FILE, "r", encoding="utf-8") as f:
+                events = json.load(f)
+            if not isinstance(events, list):
+                return []
+            return [e for e in events if isinstance(e, dict) and
+                    all(k in e for k in ("timestamp", "title", "action", "words"))][-300:]
+        except (OSError, ValueError, TypeError):
+            self.activity_warning = "Productivity log could not be read; existing log was left unchanged."
+            return []
+
+    def ensure_article_id(self, article):
+        if not article.get("id"):
+            import uuid
+            article["id"] = uuid.uuid4().hex
+        return article["id"]
+
+    def record_activity(self, action, article=None):
+        """Record activity and net word change since last logged state."""
+        article = article or self.current
+        if article is None or getattr(self, "activity_warning", None):
+            return
+        article_id = self.ensure_article_id(article)
+        words = self.article_words(article)
+        baseline = self.activity_word_baseline.get(article_id)
+        delta = words - baseline if baseline is not None else (words if action in ("Create", "Import") else 0)
+        event = {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "article_id": article_id, "title": article["title"],
+                 "action": action, "words": words, "delta": delta}
+        updated = (self.activity_log + [event])[-300:]
+        tmp = ACTIVITY_FILE + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(updated, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, ACTIVITY_FILE)
+            self.activity_log = updated
+            self.activity_word_baseline[article_id] = words
+        except OSError:
+            self.status.set("Draft saved, but productivity activity could not be logged.")
+
+    def unique_title(self, proposed, exclude=None):
+        proposed = proposed.strip() or "Untitled"
+        return not any(a is not exclude and a["title"].casefold() == proposed.casefold()
+                       for a in self.articles)
+
+    def validate_editor_title(self):
+        if self.current is None: return True
+        title = self.title_var.get().strip() or "Untitled"
+        if not self.unique_title(title, self.current):
+            messagebox.showwarning("Duplicate Title", "Another draft already uses this title. Choose a different title.")
+            self.title_var.set(self.current["title"])
+            return False
+        return True
+
     def serialize(self):
         return json.dumps(self.articles, indent=2)
 
@@ -177,17 +360,6 @@ class WritingApp(tk.Tk):
         """Write all articles safely (temp file, then swap). Returns True on success."""
         if self.saving_disabled:
             return False
-        pending_ids = set(self.pending_writing_articles)
-        today = date.today().isoformat()
-        for article in self.articles:
-            if id(article) not in pending_ids:
-                continue
-            activity = article.get("writing_activity")
-            if not isinstance(activity, list):
-                activity = []
-            if today not in activity:
-                activity.append(today)
-            article["writing_activity"] = activity
         text = self.serialize()
         tmp = DATA_FILE + ".tmp"
         try:
@@ -202,7 +374,6 @@ class WritingApp(tk.Tk):
             self.status.set("Could not save! Check the folder is writable.")
             return False
         self.last_saved = text
-        self.pending_writing_articles.difference_update(pending_ids)
         return True
 
     def autosave(self):
@@ -213,6 +384,7 @@ class WritingApp(tk.Tk):
                 if self.serialize() != self.last_saved:
                     self.current["updated"] = self.now()
                     if self.save_data(quiet=True):
+                        self.record_activity("Autosave")
                         self.status.set(f"Autosaved at {time.strftime('%H:%M:%S')}")
         finally:
             self.after(AUTOSAVE_MS, self.autosave)
@@ -254,6 +426,8 @@ class WritingApp(tk.Tk):
 
     def show(self, name):
         if name != "editor":
+            if self.current is not None and not self.validate_editor_title():
+                return
             self.store_editor()
         self.frames = {"dashboard": self.dash_frame,
                        "drafts": self.drafts_frame,
@@ -268,6 +442,8 @@ class WritingApp(tk.Tk):
         elif name == "archive":
             self.refresh_archive()
         self.frames[name].pack(fill="both", expand=True)
+        if name != "editor":
+            self.status.set({"dashboard": "Dashboard ready.", "drafts": "Drafts ready.", "archive": "Archive ready."}[name])
 
         highlight = name if name in self.nav_buttons else "drafts"   # editor belongs to Drafts
         for key, btn in self.nav_buttons.items():
@@ -275,158 +451,142 @@ class WritingApp(tk.Tk):
 
     # ---------- dashboard ----------
     def build_dashboard(self):
-        self.dash_frame = tk.Frame(self.content, bg=BG)
-        self.dash_scroll = make_scrollbar(self.dash_frame, None)
-        self.dash_canvas = tk.Canvas(self.dash_frame, bg=BG, highlightthickness=0,
-                                     yscrollcommand=self.dash_scroll.set)
-        self.dash_scroll.config(command=self.dash_canvas.yview)
-        self.dash_scroll.pack(side="right", fill="y")
-        self.dash_canvas.pack(side="left", fill="both", expand=True)
-        self.dashboard_content = tk.Frame(self.dash_canvas, bg=BG, padx=28, pady=24)
-        self.dash_content_window = self.dash_canvas.create_window(
-            (0, 0), window=self.dashboard_content, anchor="nw")
-        self.dashboard_content.bind(
-            "<Configure>",
-            lambda e: self.dash_canvas.configure(scrollregion=self.dash_canvas.bbox("all")))
-        self.dash_canvas.bind(
-            "<Configure>",
-            lambda e: self.dash_canvas.itemconfigure(self.dash_content_window, width=e.width))
-        self.bind_all("<MouseWheel>", self.scroll_dashboard, add="+")
-        page_header(self.dashboard_content, "Dashboard",
-                    "Double-click a draft to keep writing.")
+        self.dash_frame = tk.Frame(self.content, bg=BG, padx=28, pady=14)
+        page_header(self.dash_frame, "Dashboard", "Double-click a draft to keep writing.")
 
         self.stat_vars = {k: tk.StringVar() for k in ("drafts", "archived", "words")}
-        stats = tk.Frame(self.dashboard_content, bg=BG)
-        stats.pack(fill="x", pady=(6, 20))
+        stats = tk.Frame(self.dash_frame, bg=BG)
+        stats.pack(fill="x", pady=(6, 12))
         for i, (key, label) in enumerate([("drafts", "DRAFTS"),
                                           ("archived", "ARCHIVED"),
                                           ("words", "TOTAL WORDS")]):
             stats.grid_columnconfigure(i, weight=1, uniform="stat")
             box = tk.Frame(stats, bg=SURFACE, highlightthickness=1,
-                           highlightbackground=BORDER, padx=18, pady=14)
+                           highlightbackground=BORDER, padx=18, pady=10)
             box.grid(row=0, column=i, sticky="ew", padx=(0, 12 if i < 2 else 0))
             tk.Label(box, textvariable=self.stat_vars[key], bg=SURFACE, fg=NEON,
-                     font=("Helvetica", 26, "bold")).pack(anchor="w")
+                     font=("Helvetica", 28, "bold")).pack(anchor="w")
             tk.Label(box, text=label, bg=SURFACE, fg=MUTED,
                      font=("Helvetica", 9, "bold")).pack(anchor="w")
+            if key in ("drafts", "archived"):
+                target = "drafts" if key == "drafts" else "archive"
+                for widget in (box, *box.winfo_children()):
+                    widget.configure(cursor="hand2")
+                    widget.bind("<Button-1>", lambda e, n=target: self.show(n))
 
-        tk.Label(self.dashboard_content, text="RECENTLY EDITED", bg=BG, fg=MUTED,
+        tk.Label(self.dash_frame, text="RECENTLY EDITED", bg=BG, fg=MUTED,
                  font=("Helvetica", 9, "bold")).pack(anchor="w", pady=(0, 8))
-        self.recent_hint = tk.Label(self.dashboard_content, bg=BG, fg=MUTED, anchor="w")
+        self.recent_hint = tk.Label(self.dash_frame, bg=BG, fg=MUTED, anchor="w")
         self.recent_hint.pack(fill="x")
-        self.recent_list = make_list(self.dashboard_content)
-        self.recent_list.config(height=8)
-        self.recent_list.pack(fill="x")
-        self.recent_list.bind("<Double-Button-1>",
-                              lambda e: on_item(self.recent_list, e) and self.open_recent())
-
-        productivity = tk.Frame(self.dashboard_content, bg=BG)
-        productivity.pack(fill="x", pady=(18, 0))
-        productivity_header = tk.Frame(productivity, bg=BG)
-        productivity_header.pack(fill="x", pady=(0, 8))
-        tk.Label(productivity_header, text="PRODUCTIVITY LOG", bg=BG, fg=MUTED,
+        recent_area = tk.Frame(self.dash_frame, bg=BG)
+        recent_area.pack(fill="both", expand=True, pady=(8, 0))
+        self.recent_list = make_document_table(recent_area, show_sections=True)
+        add_table_scrollbar(self.recent_list, recent_area)
+        self.recent_list.pack(side="left", fill="both", expand=True)
+        set_zebra(self.recent_list)
+        self.recent_list.bind("<Double-Button-1>", lambda e: self.open_recent())
+        # Keep the recent drafts compact so the calendar remains visible.
+        recent_area.pack_configure(expand=False)
+        self.recent_list.configure(height=3)
+        log_heading = tk.Frame(self.dash_frame, bg=BG)
+        log_heading.pack(fill="x", pady=(10, 5))
+        tk.Label(log_heading, text="PRODUCTIVITY LOG", bg=BG, fg=MUTED,
                  font=("Helvetica", 9, "bold")).pack(side="left")
-        self.streak_var = tk.StringVar()
-        tk.Label(productivity_header, textvariable=self.streak_var, bg=BG, fg=NEON,
-                 font=("Helvetica", 10, "bold")).pack(side="right")
+        self.log_summary = tk.StringVar(value="CURRENT STREAK 0 DAYS  ·  BEST 0 DAYS")
+        tk.Label(log_heading, textvariable=self.log_summary, bg=BG, fg=NEON,
+                 font=("Helvetica", 9, "bold")).pack(side="right")
 
-        month_row = tk.Frame(productivity, bg=BG)
-        month_row.pack(fill="x", pady=(0, 6))
-        FlatButton(month_row, "<", lambda: self.change_log_month(-1),
-                   padx=10, pady=3).pack(side="left")
-        self.log_month_var = tk.StringVar()
-        tk.Label(month_row, textvariable=self.log_month_var, bg=BG, fg=TEXT,
-                 font=("Helvetica", 11, "bold")).pack(side="left", expand=True)
-        self.month_activity_var = tk.StringVar()
-        tk.Label(month_row, textvariable=self.month_activity_var, bg=BG, fg=MUTED,
-                 font=("Helvetica", 9)).pack(side="left", padx=8)
-        FlatButton(month_row, ">", lambda: self.change_log_month(1),
-                   padx=10, pady=3).pack(side="right")
-
-        self.log_month = date.today().replace(day=1)
-        calendar_grid = tk.Frame(productivity, bg=BG)
-        calendar_grid.pack(fill="x")
-        self.log_day_cells = []
-        for column, weekday in enumerate(("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")):
-            calendar_grid.grid_columnconfigure(column, weight=1, uniform="calendar-day")
-            tk.Label(calendar_grid, text=weekday, bg=BG, fg=MUTED,
+        calendar_area = tk.Frame(self.dash_frame, bg=BG)
+        calendar_area.pack(fill="x")
+        month_bar = tk.Frame(calendar_area, bg=BG)
+        month_bar.pack(fill="x", pady=(0, 5))
+        self.productivity_month = date.today().replace(day=1)
+        FlatButton(month_bar, "‹", lambda: self.shift_productivity_month(-1),
+                   padx=9, pady=2, font=("Helvetica", 12, "bold")).pack(side="left")
+        self.productivity_month_label = tk.Label(
+            month_bar, bg=BG, fg=TEXT, font=("Helvetica", 10, "bold"))
+        self.productivity_month_label.pack(side="left", expand=True)
+        FlatButton(month_bar, "›", lambda: self.shift_productivity_month(1),
+                   padx=9, pady=2, font=("Helvetica", 12, "bold")).pack(side="right")
+        self.productivity_grid = tk.Frame(calendar_area, bg=BG)
+        self.productivity_grid.pack(fill="x")
+        for column, weekday in enumerate(("M", "T", "W", "T", "F", "S", "S")):
+            self.productivity_grid.grid_columnconfigure(column, weight=1, uniform="day")
+            tk.Label(self.productivity_grid, text=weekday, bg=BG, fg=MUTED,
                      font=("Helvetica", 8, "bold")).grid(
-                         row=0, column=column, sticky="ew", pady=(0, 3))
-        for row in range(1, 7):
-            cells = []
-            for column in range(7):
-                cell = tk.Label(calendar_grid, text="", bg=PANEL, fg=MUTED,
-                                font=("Helvetica", 9), height=1,
-                                highlightthickness=1, highlightbackground=BORDER)
-                cell.grid(row=row, column=column, sticky="ew", padx=2, pady=2)
-                cells.append(cell)
-            self.log_day_cells.append(cells)
-
-    def scroll_dashboard(self, event):
-        if self.dash_frame.winfo_ismapped():
-            self.dash_canvas.yview_scroll(int(-event.delta / 120), "units")
-            return "break"
+                         row=0, column=column, sticky="ew", padx=2, pady=(0, 2))
+        calendar_footer = tk.Frame(calendar_area, bg=BG)
+        calendar_footer.pack(fill="x", pady=(5, 0))
+        self.productivity_footer = tk.StringVar()
+        tk.Label(calendar_footer, textvariable=self.productivity_footer,
+                 bg=BG, fg=MUTED, font=("Helvetica", 9)).pack(side="left")
+        legend = tk.Frame(calendar_footer, bg=BG)
+        legend.pack(side="right")
+        tk.Label(legend, text="LESS", bg=BG, fg=MUTED,
+                 font=("Helvetica", 8)).pack(side="left", padx=(0, 3))
+        for color in (SURFACE, "#173016", "#22551A", "#2E7A20", NEON):
+            tk.Label(legend, text=" ", bg=color, width=1).pack(side="left", padx=1)
+        tk.Label(legend, text="MORE", bg=BG, fg=MUTED,
+                 font=("Helvetica", 8)).pack(side="left", padx=(3, 0))
 
     def recent_articles(self):
         return sorted(self.active_articles(), key=lambda a: a["updated"], reverse=True)[:8]
 
-    def writing_dates(self):
-        dates = set()
-        for article in self.articles:
-            activity = article.get("writing_activity", [])
-            if not isinstance(activity, list):
-                continue
-            for value in activity:
-                if not isinstance(value, str):
-                    continue
-                try:
-                    dates.add(date.fromisoformat(value))
-                except ValueError:
-                    continue
-        return dates
-
-    def current_writing_streak(self, writing_dates):
-        day = date.today()
-        if day not in writing_dates:
-            day -= timedelta(days=1)
-        streak = 0
-        while day in writing_dates:
-            streak += 1
-            day -= timedelta(days=1)
-        return streak
-
-    def change_log_month(self, offset):
-        month_index = self.log_month.year * 12 + self.log_month.month - 1 + offset
+    def shift_productivity_month(self, amount):
+        month_index = self.productivity_month.year * 12 + self.productivity_month.month - 1 + amount
         year, month = divmod(month_index, 12)
-        self.log_month = date(year, month + 1, 1)
-        self.refresh_productivity_log()
+        candidate = date(year, month + 1, 1)
+        if candidate <= date.today().replace(day=1):
+            self.productivity_month = candidate
+            self.refresh_productivity_calendar()
 
-    def refresh_productivity_log(self):
-        writing_dates = self.writing_dates()
-        streak = self.current_writing_streak(writing_dates)
-        self.streak_var.set(f"{streak} day streak")
-
-        year, month = self.log_month.year, self.log_month.month
-        self.log_month_var.set(self.log_month.strftime("%B %Y"))
-        monthly_dates = {day for day in writing_dates
-                         if day.year == year and day.month == month}
-        self.month_activity_var.set(f"{len(monthly_dates)} writing days")
-        weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)
-        weeks.extend([[0] * 7 for _ in range(6 - len(weeks))])
+    def refresh_productivity_calendar(self):
         today = date.today()
-        for row, week in enumerate(weeks):
+        words_by_day = activity_words_by_day(self.activity_log)
+        current_streak, best_streak, active_days = writing_streaks(words_by_day, today)
+        self.log_summary.set(
+            f"CURRENT STREAK {current_streak} DAYS  ·  BEST {best_streak} DAYS")
+        month = self.productivity_month
+        self.productivity_month_label.config(text=f"{calendar.month_name[month.month]} {month.year}")
+        for widget in self.productivity_grid.grid_slaves():
+            if int(widget.grid_info()["row"]) > 0:
+                widget.destroy()
+
+        month_weeks = calendar.monthcalendar(month.year, month.month)
+        for row, week in enumerate(month_weeks, start=1):
             for column, day_number in enumerate(week):
-                cell = self.log_day_cells[row][column]
                 if not day_number:
-                    cell.config(text="", bg=BG, highlightbackground=BG)
                     continue
-                day = date(year, month, day_number)
-                active = day in writing_dates
-                cell.config(text=str(day_number),
-                            bg="#173014" if active else PANEL,
-                            fg=NEON if active else TEXT,
-                            font=("Helvetica", 9, "bold" if active else "normal"),
-                            highlightbackground=NEON if day == today else BORDER)
+                activity_day = date(month.year, month.month, day_number)
+                words = words_by_day.get(activity_day, 0)
+                if words >= 100:
+                    cell_bg = NEON
+                    cell_fg = BG
+                elif words >= 50:
+                    cell_bg = "#2E7A20"
+                    cell_fg = TEXT
+                elif words >= 20:
+                    cell_bg = "#22551A"
+                    cell_fg = TEXT
+                elif words:
+                    cell_bg = "#173016"
+                    cell_fg = TEXT
+                else:
+                    cell_bg = SURFACE
+                    cell_fg = MUTED
+                tk.Label(
+                    self.productivity_grid, text=str(day_number), bg=cell_bg, fg=cell_fg,
+                    font=("Helvetica", 9, "bold" if words else "normal"),
+                    height=1, padx=2, pady=1,
+                    highlightthickness=1 if activity_day == today else 0,
+                    highlightbackground=NEON).grid(
+                        row=row, column=column, sticky="ew", padx=2, pady=1)
+
+        month_days = [day for day in active_days
+                      if day.year == month.year and day.month == month.month]
+        month_words = sum(words_by_day[day] for day in month_days)
+        self.productivity_footer.set(
+            f"{month_words:,} words written  ·  {len(month_days)} active days")
 
     def refresh_dashboard(self):
         active = self.active_articles()
@@ -434,17 +594,20 @@ class WritingApp(tk.Tk):
         self.stat_vars["archived"].set(len(self.archived_articles()))
         self.stat_vars["words"].set(sum(self.article_words(a) for a in active))
 
-        self.recent_list.delete(0, "end")
-        for a in self.recent_articles():
-            self.recent_list.insert("end", f"  {a['title']}   -   {a['updated']}")
+        self.recent_list.delete(*self.recent_list.get_children())
+        for i, a in enumerate(self.recent_articles()):
+            self.recent_list.insert("", "end", iid=str(i),
+                                    values=(f"{i + 1:02d}", a["title"], len(a["sections"]),
+                                             self.article_words(a), display_date(a["updated"])),
+                                     tags=("even" if i % 2 == 0 else "odd",))
         self.recent_hint.config(
             text="" if active else "No drafts yet. Open Drafts and press New to start writing.")
-        self.refresh_productivity_log()
+        self.refresh_productivity_calendar()
 
     def open_recent(self):
-        sel = self.recent_list.curselection()
-        if sel:
-            self.open_article(self.recent_articles()[sel[0]])
+        idx = table_selected_index(self.recent_list)
+        if idx is not None:
+            self.open_article(self.recent_articles()[idx])
 
     # ---------- drafts ----------
     def build_drafts(self):
@@ -470,23 +633,45 @@ class WritingApp(tk.Tk):
         sort_menu.pack(side="left")
         self.sort_var.trace_add("write", lambda *_: self.refresh_drafts())
         self.visible_drafts = []
+        self.drafts_count_var = tk.StringVar(value="Total Drafts: 0  |  Showing: 0 of 0")
+        tk.Label(self.drafts_frame, textvariable=self.drafts_count_var,
+                 bg=BG, fg=NEON, anchor="w", font=("Helvetica", 10, "bold")).pack(fill="x", pady=(0, 5))
         self.drafts_hint = tk.Label(self.drafts_frame, bg=BG, fg=MUTED, anchor="w")
         self.drafts_hint.pack(fill="x")
-        self.drafts_list = make_list(self.drafts_frame)
-        self.drafts_list.pack(fill="both", expand=True, pady=(0, 14))
-        self.drafts_list.bind("<Double-Button-1>",
-                              lambda e: on_item(self.drafts_list, e) and self.open_selected_draft())
+        draft_area = tk.Frame(self.drafts_frame, bg=BG)
+        draft_area.pack(fill="both", expand=True, pady=(12, 18))
+        self.drafts_list = make_document_table(draft_area, show_sections=True, show_goal=True)
+        add_table_scrollbar(self.drafts_list, draft_area)
+        self.drafts_list.pack(side="left", fill="both", expand=True)
+        set_zebra(self.drafts_list)
+        self.drafts_list.bind("<Button-3>", self.draft_context_menu)
+        self.drafts_list.bind("<Button-2>", self.draft_context_menu)
+        self.drafts_list.bind("<Double-Button-1>", lambda e: self.open_selected_draft())
+        self.draft_menu = tk.Menu(self, tearoff=False, bg=PANEL, fg=TEXT,
+                                  activebackground=NEON, activeforeground=BG)
+        self.draft_menu.add_command(label="Open", command=self.open_selected_draft)
+        self.draft_menu.add_command(label="Archive", command=self.archive_selected_article)
+        self.draft_menu.add_separator()
+        self.draft_menu.add_command(label="Delete", command=self.delete_selected_draft)
 
         row = tk.Frame(self.drafts_frame, bg=BG)
         row.pack(anchor="w")
         for text, cmd, kind in [("New", self.new_article, "primary"),
+                                ("Import TXT", self.import_txt, "secondary"),
                                 ("Editor", self.open_selected_draft, "secondary"),
                                 ("Archive", self.archive_selected_article, "secondary"),
                                 ("Delete", self.delete_selected_draft, "danger")]:
             FlatButton(row, text, cmd, kind).pack(side="left", padx=(0, 8))
 
+    def draft_context_menu(self, event):
+        row = self.drafts_list.identify_row(event.y)
+        if not row: return
+        self.drafts_list.selection_set(row)
+        self.draft_menu.tk_popup(event.x_root, event.y_root)
+        self.draft_menu.grab_release()
+
     def refresh_drafts(self):
-        self.drafts_list.delete(0, "end")
+        self.drafts_list.delete(*self.drafts_list.get_children())
         query = self.search_var.get().strip().casefold()
         self.visible_drafts = [a for a in self.active_articles()
                                if query in a["title"].casefold()]
@@ -499,21 +684,29 @@ class WritingApp(tk.Tk):
             self.visible_drafts.sort(key=lambda a: a["title"].casefold())
         elif mode == "Title Z-A":
             self.visible_drafts.sort(key=lambda a: a["title"].casefold(), reverse=True)
-        for a in self.visible_drafts:
-            self.drafts_list.insert(
-                "end", f"  {a['title']}   -   {self.article_words(a)} words   -   {a['updated']}")
+        total_drafts = len(self.active_articles())
+        shown_drafts = len(self.visible_drafts)
+        self.drafts_count_var.set(
+            f"Total Drafts: {total_drafts}  |  Showing: {shown_drafts} of {total_drafts}")
+        for i, a in enumerate(self.visible_drafts):
+            self.drafts_list.insert("", "end", iid=str(i),
+                                    values=(f"{i + 1:02d}", a["title"], len(a["sections"]),
+                                             self.article_words(a),
+                                              f"{self.article_words(a)}/{a.get('word_goal', 500)}",
+                                              display_date(a["updated"])),
+                                     tags=("even" if i % 2 == 0 else "odd",))
         self.drafts_hint.config(
             text=("No matching drafts." if query else "No drafts yet. Press New to start writing.")
             if not self.visible_drafts else "")
 
     def selected_draft(self):
-        sel = self.drafts_list.curselection()
-        if not sel:
+        idx = table_selected_index(self.drafts_list)
+        if idx is None:
             messagebox.showinfo("Select", "Select a draft first.")
             return None
-        if sel[0] >= len(self.visible_drafts):
+        if idx >= len(self.visible_drafts):
             return None
-        return self.visible_drafts[sel[0]]
+        return self.visible_drafts[idx]
 
     def open_selected_draft(self):
         a = self.selected_draft()
@@ -537,10 +730,17 @@ class WritingApp(tk.Tk):
         page_header(self.archive_frame, "Archive",
                     "Restore a draft to bring it back to Drafts.")
 
+        self.archive_count_var = tk.StringVar(value="Total Archived: 0")
+        tk.Label(self.archive_frame, textvariable=self.archive_count_var,
+                 bg=BG, fg=NEON, anchor="w", font=("Helvetica", 10, "bold")).pack(fill="x", pady=(0, 5))
         self.archive_hint = tk.Label(self.archive_frame, bg=BG, fg=MUTED, anchor="w")
         self.archive_hint.pack(fill="x")
-        self.archive_list = make_list(self.archive_frame)
-        self.archive_list.pack(fill="both", expand=True, pady=(0, 14))
+        archive_area = tk.Frame(self.archive_frame, bg=BG)
+        archive_area.pack(fill="both", expand=True, pady=(12, 18))
+        self.archive_list = make_document_table(archive_area, show_sections=True)
+        add_table_scrollbar(self.archive_list, archive_area)
+        self.archive_list.pack(side="left", fill="both", expand=True)
+        set_zebra(self.archive_list)
 
         row = tk.Frame(self.archive_frame, bg=BG)
         row.pack(anchor="w")
@@ -549,19 +749,24 @@ class WritingApp(tk.Tk):
         FlatButton(row, "Delete", self.delete_selected_archived, "danger").pack(side="left")
 
     def refresh_archive(self):
-        self.archive_list.delete(0, "end")
-        for a in self.archived_articles():
-            self.archive_list.insert(
-                "end", f"  {a['title']}   -   {self.article_words(a)} words   -   {a['updated']}")
+        self.archive_list.delete(*self.archive_list.get_children())
+        archived = self.archived_articles()
+        self.archive_count_var.set(f"Total Archived: {len(archived)}")
+        for i, a in enumerate(archived):
+            self.archive_list.insert("", "end", iid=str(i),
+                                     values=(f"{i + 1:02d}", a["title"], len(a["sections"]),
+                                             self.article_words(a), display_date(a["updated"])),
+                                      tags=("even" if i % 2 == 0 else "odd",))
         self.archive_hint.config(
-            text="" if self.archived_articles() else "The archive is empty.")
+            text="" if archived else "The archive is empty.")
 
     def selected_archived(self):
-        sel = self.archive_list.curselection()
-        if not sel:
+        idx = table_selected_index(self.archive_list)
+        if idx is None:
             messagebox.showinfo("Select", "Select an archived draft first.")
             return None
-        return self.archived_articles()[sel[0]]
+        archived = self.archived_articles()
+        return archived[idx] if idx < len(archived) else None
 
     def archive_article(self, article):
         self.store_editor()
@@ -571,6 +776,7 @@ class WritingApp(tk.Tk):
             self.current = None
             self.sec_index = None
         if self.save_data():
+            self.record_activity("Archive", article)
             self.status.set(f"'{article['title']}' moved to the archive.")
             self.show("archive")
 
@@ -581,6 +787,7 @@ class WritingApp(tk.Tk):
         a["archived"] = False
         a["updated"] = self.now()
         if self.save_data():
+            self.record_activity("Restore", a)
             self.status.set(f"'{a['title']}' restored to Drafts.")
             self.show("drafts")
 
@@ -607,7 +814,7 @@ class WritingApp(tk.Tk):
         self.editor_frame = tk.Frame(self.content, bg=BG)
 
         # top bar: title + buttons
-        top = tk.Frame(self.editor_frame, bg=SURFACE, padx=14, pady=10)
+        top = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=13)
         top.pack(fill="x")
         tk.Label(top, text="TITLE", bg=SURFACE, fg=MUTED,
                  font=("Helvetica", 9, "bold")).pack(side="left")
@@ -622,7 +829,7 @@ class WritingApp(tk.Tk):
         FlatButton(top, "Export .txt", self.export_article).pack(side="left", padx=3)
         FlatButton(top, "Find / Replace", self.open_find_replace).pack(side="left", padx=3)
         tk.Frame(self.editor_frame, bg=NEON, height=1).pack(fill="x")
-        toolbar = tk.Frame(self.editor_frame, bg=SURFACE, padx=12, pady=5)
+        toolbar = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=11)
         toolbar.pack(fill="x")
         for name, kind in [("Bold", "bold"), ("Italic", "italic"), ("Underline", "underline"),
                            ("Left", "left"), ("Center", "center"), ("Right", "right")]:
@@ -630,11 +837,31 @@ class WritingApp(tk.Tk):
         FlatButton(toolbar, "Grammar Check", self.check_grammar, "primary").pack(side="right", padx=3)
         FlatButton(toolbar, "Export HTML", self.export_html).pack(side="right", padx=3)
 
+        recovery_bar = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=12)
+        recovery_bar.pack(fill="x")
+        tk.Label(recovery_bar, text="WORD GOAL", bg=SURFACE, fg=MUTED).pack(side="left", padx=(0, 6))
+        self.goal_var = tk.StringVar(value="500")
+        tk.Entry(recovery_bar, textvariable=self.goal_var, width=9, bg=BG, fg=TEXT,
+                 insertbackground=NEON, relief="flat", font=("Helvetica", 11),
+                 highlightthickness=1, highlightbackground=BORDER).pack(side="left", padx=(0, 10), ipady=5)
+        FlatButton(recovery_bar, "Set Goal", self.set_word_goal).pack(side="left", padx=3)
+        self.progress_var = tk.StringVar(value="Goal: —")
+        tk.Label(recovery_bar, textvariable=self.progress_var, bg=SURFACE, fg=NEON,
+                 font=("Helvetica", 10, "bold")).pack(side="left", padx=12)
+        self.goal_bar = ttk.Progressbar(recovery_bar, maximum=100, length=165,
+                                         mode="determinate", style="Quillian.Horizontal.TProgressbar")
+        ttk.Style(self).configure("Quillian.Horizontal.TProgressbar", troughcolor=BORDER,
+                                   background=NEON, bordercolor=BORDER, lightcolor=NEON,
+                                   darkcolor=NEON, thickness=10)
+        self.goal_bar.pack(side="left", padx=(12, 16))
+        FlatButton(recovery_bar, "History", self.open_history).pack(side="right", padx=3)
+        FlatButton(recovery_bar, "Backup", self.backup_now).pack(side="right", padx=3)
+
         body = tk.Frame(self.editor_frame, bg=BG)
         body.pack(fill="both", expand=True)
 
         # side panel: sections
-        side = tk.Frame(body, bg=BG, padx=14, pady=12)
+        side = tk.Frame(body, bg=BG, padx=18, pady=16)
         side.pack(side="left", fill="y")
         tk.Label(side, text="SECTIONS", bg=BG, fg=MUTED,
                  font=("Helvetica", 9, "bold")).pack(anchor="w", pady=(0, 6))
@@ -645,11 +872,11 @@ class WritingApp(tk.Tk):
                           ("Rename", self.rename_section),
                           ("Move Up", lambda: self.move_section(-1)),
                           ("Move Down", lambda: self.move_section(1))]:
-            FlatButton(side, text, cmd).pack(fill="x", pady=2)
-        FlatButton(side, "Delete Section", self.delete_section, "danger").pack(fill="x", pady=2)
+            FlatButton(side, text, cmd).pack(fill="x", pady=3)
+        FlatButton(side, "Delete Section", self.delete_section, "danger").pack(fill="x", pady=3)
 
         # text area
-        right = tk.Frame(body, bg=BG, padx=6, pady=12)
+        right = tk.Frame(body, bg=BG, padx=8, pady=16)
         right.pack(side="left", fill="both", expand=True)
         self.sec_label = tk.Label(right, text="", bg=BG, fg=NEON,
                                   font=("Helvetica", 13, "bold"))
@@ -662,7 +889,7 @@ class WritingApp(tk.Tk):
         self.text = tk.Text(right, wrap="word", undo=True, font=("Georgia", 13),
                             bg=SURFACE, fg=TEXT, insertbackground=NEON,
                             selectbackground="#2A6B16", selectforeground=TEXT,
-                            relief="flat", bd=0, padx=18, pady=14, spacing3=4,
+                            relief="flat", bd=0, padx=24, pady=20, spacing3=5,
                             highlightthickness=1, highlightbackground=BORDER,
                             highlightcolor=NEON, yscrollcommand=scroll.set)
         self.text.tag_configure("bold", font=("Georgia", 13, "bold"))
@@ -791,13 +1018,16 @@ class WritingApp(tk.Tk):
 
     def new_article(self):
         title = simpledialog.askstring("New Draft", "Draft title:", parent=self)
-        if not title:
+        if not title: return
+        if not self.unique_title(title):
+            messagebox.showwarning("Duplicate Title", "Another draft already uses this title.")
             return
         article = {"title": title.strip() or "Untitled",
                    "updated": self.now(),
                    "sections": [{"title": "Introduction", "text": ""}]}
         self.articles.append(article)
         if self.save_data():
+            self.record_activity("Create", article)
             self.open_article(article)
         else:
             self.articles.remove(article)
@@ -806,6 +1036,7 @@ class WritingApp(tk.Tk):
         self.store_editor()
         self.current = article
         self.title_var.set(article["title"])
+        self.goal_var.set(str(article.get("word_goal", 500)))
         self.refresh_sections()
         self.sec_index = None
         self.select_section(0)
@@ -826,7 +1057,6 @@ class WritingApp(tk.Tk):
         self.text.delete("1.0", "end")
         self.text.insert("1.0", section["text"])
         self.text.edit_reset()
-        self.section_text_snapshot = section["text"]
         for tag, ranges in section.get("formatting", {}).items():
             if tag not in ("bold", "italic", "underline", "center", "right") or not isinstance(ranges, list):
                 continue
@@ -855,11 +1085,7 @@ class WritingApp(tk.Tk):
             return
         if self.sec_index < len(self.current["sections"]):
             section = self.current["sections"][self.sec_index]
-            text = self.text.get("1.0", "end-1c")
-            if text != self.section_text_snapshot and text.strip():
-                self.pending_writing_articles.add(id(self.current))
-            section["text"] = text
-            self.section_text_snapshot = text
+            section["text"] = self.text.get("1.0", "end-1c")
             formatting = {}
             for tag in ("bold", "italic", "underline", "center", "right"):
                 positions = self.text.tag_ranges(tag)
@@ -877,6 +1103,11 @@ class WritingApp(tk.Tk):
         total = sum(word_count(s["text"]) for i, s in enumerate(self.current["sections"])
                     if i != self.sec_index) + section_words
         self.count_var.set(f"Section: {section_words} words   |   Article: {total} words")
+        goal = self.current.get("word_goal", 500)
+        if not isinstance(goal, int) or goal < 1:
+            goal = 500
+        self.progress_var.set(f"{total}/{goal} words ({min(100, int(total / goal * 100))}%)")
+        self.goal_bar["value"] = min(100, total / max(1, goal) * 100)
 
     def add_section(self):
         if self.current is None:
@@ -932,9 +1163,12 @@ class WritingApp(tk.Tk):
         """Save the current work to Drafts."""
         if self.current is None:
             return
+        if not self.validate_editor_title(): return
         self.store_editor()
+        self.record_history()
         self.current["updated"] = self.now()
         if self.save_data():
+            self.record_activity("Save")
             self.status.set(f"Saved to Drafts at {time.strftime('%H:%M:%S')}")
 
     def archive_current_article(self):
@@ -1080,6 +1314,119 @@ class WritingApp(tk.Tk):
             count += 1
         self.update_count()
         self.find_info.set(f"Replaced {count} match(es) in this section.")
+
+    def set_word_goal(self):
+        if self.current is None:
+            return
+        try:
+            goal = int(self.goal_var.get().strip())
+            if not 1 <= goal <= 1000000:
+                raise ValueError()
+        except ValueError:
+            messagebox.showwarning("Word Goal", "Enter a whole number between 1 and 1,000,000.")
+            return
+        self.store_editor()
+        self.current["word_goal"] = goal
+        self.update_count()
+        if self.save_data():
+            self.status.set(f"Word goal set to {goal}.")
+
+    # ---------- Import and recovery ----------
+    def import_txt(self):
+        path = filedialog.askopenfilename(parent=self, title="Import Text File",
+                                          filetypes=[("Text files", "*.txt")])
+        if not path:
+            return
+        try:
+            if os.path.getsize(path) > 5 * 1024 * 1024:
+                messagebox.showwarning("Import", "Text file exceeds the 5 MB limit.")
+                return
+            with open(path, "r", encoding="utf-8-sig") as f:
+                content = f.read()
+        except (OSError, UnicodeError) as exc:
+            messagebox.showerror("Import failed", str(exc))
+            return
+        import_title = os.path.splitext(os.path.basename(path))[0] or "Imported Draft"
+        if not self.unique_title(import_title):
+            messagebox.showwarning("Duplicate Title", "Another draft already uses this title.")
+            return
+        article = {"title": import_title,
+                   "updated": self.now(), "sections": [{"title": "Introduction", "text": content}]}
+        self.articles.append(article)
+        if self.save_data():
+            self.record_activity("Import", article)
+            self.open_article(article)
+            self.status.set("Text file imported.")
+        else:
+            self.articles.remove(article)
+
+    def record_history(self):
+        """Keep up to 10 previous manually saved revisions inside articles.json."""
+        if self.current is None:
+            return
+        snapshot = {"date": self.now(), "title": self.current["title"],
+                    "sections": copy.deepcopy(self.current["sections"])}
+        history = self.current.setdefault("history", [])
+        if not history or history[-1]["sections"] != snapshot["sections"] or history[-1]["title"] != snapshot["title"]:
+            history.append(snapshot)
+            del history[:-10]
+
+    def open_history(self):
+        if self.current is None:
+            return
+        self.store_editor()
+        history = self.current.get("history", [])
+        if not history:
+            messagebox.showinfo("Version History", "No saved revisions yet. Use Save to create one.")
+            return
+        win = tk.Toplevel(self)
+        win.title("Version History")
+        win.geometry("460x340")
+        win.configure(bg=BG)
+        tk.Label(win, text="SAVED REVISIONS (up to 10)", bg=BG, fg=NEON,
+                 font=("Helvetica", 12, "bold")).pack(pady=12)
+        lst = make_list(win)
+        lst.pack(fill="both", expand=True, padx=16, pady=8)
+        for i, snap in enumerate(history):
+            lst.insert("end", f"{i+1}. {snap['date']}  —  {snap['title']}")
+        def restore():
+            sel = lst.curselection()
+            if not sel:
+                messagebox.showinfo("History", "Select a revision first.", parent=win)
+                return
+            if not messagebox.askyesno("Restore", "Replace current text with this saved revision?", parent=win):
+                return
+            snapshot = history[sel[0]]
+            self.record_history()
+            self.current["sections"] = copy.deepcopy(snapshot["sections"])
+            self.current["title"] = snapshot["title"]
+            self.title_var.set(snapshot["title"])
+            self.refresh_sections()
+            self.sec_index = None
+            self.select_section(0)
+            self.current["updated"] = self.now()
+            if self.save_data():
+                win.destroy()
+                self.status.set("Revision restored.")
+        FlatButton(win, "Restore Selected", restore, "primary").pack(pady=10)
+
+    def backup_now(self):
+        self.store_editor()
+        if not self.save_data():
+            return
+        dest = filedialog.asksaveasfilename(parent=self, title="Save Backup",
+                                            defaultextension=".json",
+                                            initialfile="quillian-backup-" + time.strftime("%Y%m%d-%H%M%S") + ".json",
+                                            filetypes=[("JSON backup", "*.json")])
+        if not dest:
+            return
+        try:
+            if os.path.abspath(dest) == os.path.abspath(DATA_FILE):
+                raise OSError("Choose a different file from articles.json")
+            shutil.copy2(DATA_FILE, dest)
+            self.status.set("Backup saved: " + dest)
+        except OSError as exc:
+            messagebox.showerror("Backup failed", str(exc))
 
     def on_close(self):
         self.store_editor()
