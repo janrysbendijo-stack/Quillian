@@ -1,7 +1,7 @@
 [
   {
     "title": "ARt1",
-    "updated": "2026-10-21 06:16",
+    "updated": "2026-10-21 08:02",
     "sections": [
       {
         "title": "Introduction",
@@ -17,11 +17,30 @@
     "writing_activity": [
       "2026-10-20"
     ],
-    "id": "20df111fc3fa4fc6932cdcccc9378d45"
+    "id": "20df111fc3fa4fc6932cdcccc9378d45",
+    "history": [
+      {
+        "date": "2026-10-21 07:52",
+        "title": "ARt1",
+        "sections": [
+          {
+            "title": "Introduction",
+            "text": "The quick brown fox jumps over the lazy dog",
+            "formatting": {}
+          },
+          {
+            "title": "jyfj",
+            "text": "",
+            "formatting": {}
+          }
+        ]
+      }
+    ],
+    "archived": false
   },
   {
     "title": "ART2",
-    "updated": "2026-10-20 20:26",
+    "updated": "2026-10-21 08:02",
     "sections": [
       {
         "title": "Introduction",
@@ -29,23 +48,17 @@
         "formatting": {}
       }
     ],
-    "id": "d4bdd4e1b11d4948baaade4b5a14b8c4"
+    "id": "d4bdd4e1b11d4948baaade4b5a14b8c4",
+    "archived": false
   },
   {
     "title": "Article 1",
-    "updated": "2026-10-21 06:23",
+    "updated": "2026-10-21 08:02",
     "sections": [
       {
         "title": "Introduction",
         "text": "The quick brown fox jumps over the lazy dog",
-        "formatting": {
-          "right": [
-            [
-              0,
-              44
-            ]
-          ]
-        }
+        "formatting": {}
       },
       {
         "title": "Chapter 1",
@@ -68,5 +81,37 @@
       }
     ],
     "archived": false
+  },
+  {
+    "title": "Chapter 0",
+    "updated": "2026-10-21 08:01",
+    "sections": [
+      {
+        "title": "Introduction",
+        "text": "Chapter 0\n\nmany years ago, the zawarudo has fallen into a great fall, an apocalypse broughts down to the earth to and bring its end, gates of hell have opened through various\nplaces all over the zawarudo, and from it, emerge vast numbers of beast that shed havocs.",
+        "formatting": {
+          "center": [
+            [
+              0,
+              11
+            ]
+          ]
+        }
+      }
+    ],
+    "id": "a1fb4cf576704503a9bf196af5bad7d4",
+    "word_goal": 50
+  },
+  {
+    "title": "art34",
+    "updated": "2026-10-21 08:21",
+    "sections": [
+      {
+        "title": "Introduction",
+        "text": "",
+        "formatting": {}
+      }
+    ],
+    "id": "4d608e5b1fcd4a939a7119512202227b"
   }
 ]

@@ -22,7 +22,7 @@ THEMES = {
         "DANGER": "#FF5C5C", "ODD": "#202020", "SELECTED": "#235B1A",
         "HEAT1": "#173016", "HEAT2": "#22551A", "HEAT3": "#2E7A20",
         "MENU_HOVER": "#292929", "DANGER_HOVER": "#2A1414",
-        "TEXT_SELECTION": "#2A6B16",
+        "TEXT_SELECTION": "#2A6B16", "GRAMMAR_ISSUE": "#FFB86B",
     },
     "light": {
         "BG": "#F5F7F2", "NAVBG": "#E8ECE4", "SURFACE": "#FFFFFF",
@@ -31,7 +31,7 @@ THEMES = {
         "DANGER": "#C93636", "ODD": "#F0F3ED", "SELECTED": "#CFE8C9",
         "HEAT1": "#E0F0DC", "HEAT2": "#B8DFAF", "HEAT3": "#78BF68",
         "MENU_HOVER": "#DCE4D7", "DANGER_HOVER": "#F8E4E4",
-        "TEXT_SELECTION": "#CFE8C9",
+        "TEXT_SELECTION": "#CFE8C9", "GRAMMAR_ISSUE": "#A65B00",
     },
 }
 THEME_NAME = "dark"
@@ -40,7 +40,7 @@ THEME_NAME = "dark"
 def set_theme_colors(name):
     global THEME_NAME, BG, NAVBG, SURFACE, PANEL, BORDER, NEON, NEON_HOVER
     global TEXT, MUTED, DANGER, ODD, SELECTED, HEAT1, HEAT2, HEAT3
-    global MENU_HOVER, DANGER_HOVER, TEXT_SELECTION, KINDS
+    global MENU_HOVER, DANGER_HOVER, TEXT_SELECTION, GRAMMAR_ISSUE, KINDS
     THEME_NAME = name
     globals().update(THEMES[name])
     KINDS = {
@@ -469,7 +469,7 @@ class WritingApp(tk.Tk):
             for option in color_options:
                 try:
                     value = widget.cget(option)
-                    if value in color_map:
+                    if isinstance(value, str) and value in color_map:
                         widget.configure(**{option: color_map[value]})
                 except tk.TclError:
                     continue
@@ -479,6 +479,7 @@ class WritingApp(tk.Tk):
                 recolor(child)
 
         recolor(self)
+        self.apply_editor_theme()
         self.theme_button.config(text="Dark mode" if new_name == "light" else "Light mode")
         style = ttk.Style(self)
         style.configure("Quillian.Treeview", background=SURFACE,
@@ -496,6 +497,38 @@ class WritingApp(tk.Tk):
         self.refresh_dashboard()
         self.refresh_drafts()
         self.refresh_archive()
+
+    def apply_editor_theme(self):
+        for frame, color in (
+                (self.editor_frame, BG), (self.editor_body, BG),
+                (self.editor_side, BG), (self.editor_right, BG),
+                (self.editor_top, SURFACE), (self.editor_toolbar, SURFACE),
+                (self.editor_recovery_bar, SURFACE)):
+            frame.configure(bg=color)
+
+        for label, bg, fg in (
+                (self.editor_title_label, SURFACE, MUTED),
+                (self.editor_goal_label, SURFACE, MUTED),
+                (self.editor_progress_label, SURFACE, NEON),
+                (self.editor_section_label, BG, MUTED),
+                (self.editor_count_label, BG, MUTED),
+                (self.sec_label, BG, NEON)):
+            label.configure(bg=bg, fg=fg)
+
+        for entry in (self.title_entry, self.goal_entry):
+            entry.configure(bg=BG, fg=TEXT, insertbackground=NEON,
+                            highlightbackground=BORDER, highlightcolor=NEON)
+
+        self.sec_list.configure(
+            bg=SURFACE, fg=TEXT, selectbackground=NEON, selectforeground=BG,
+            highlightbackground=BORDER, highlightcolor=NEON)
+        self.editor_scrollbar.configure(
+            bg=BORDER, troughcolor=SURFACE, activebackground=NEON)
+        self.text.configure(
+            bg=SURFACE, fg=TEXT, insertbackground=NEON,
+            selectbackground=TEXT_SELECTION, selectforeground=TEXT,
+            highlightbackground=BORDER, highlightcolor=NEON)
+        self.text.tag_configure("grammar_issue", foreground=GRAMMAR_ISSUE)
 
     def show(self, name):
         if name != "editor":
@@ -712,8 +745,9 @@ class WritingApp(tk.Tk):
         self.drafts_hint = tk.Label(self.drafts_frame, bg=BG, fg=MUTED, anchor="w")
         self.drafts_hint.pack(fill="x")
         draft_area = tk.Frame(self.drafts_frame, bg=BG)
-        draft_area.pack(fill="both", expand=True, pady=(12, 18))
+        draft_area.pack(fill="both", expand=True, pady=(12, 10))
         self.drafts_list = make_document_table(draft_area, show_sections=True, show_goal=True)
+        self.drafts_list.configure(height=6)
         add_table_scrollbar(self.drafts_list, draft_area)
         self.drafts_list.pack(side="left", fill="both", expand=True)
         set_zebra(self.drafts_list)
@@ -727,14 +761,14 @@ class WritingApp(tk.Tk):
         self.draft_menu.add_separator()
         self.draft_menu.add_command(label="Delete", command=self.delete_selected_draft)
 
-        row = tk.Frame(self.drafts_frame, bg=BG)
-        row.pack(anchor="w")
+        self.draft_actions = tk.Frame(self.drafts_frame, bg=BG)
+        self.draft_actions.pack(anchor="w", pady=(0, 6))
         for text, cmd, kind in [("New", self.new_article, "primary"),
                                 ("Import TXT", self.import_txt, "secondary"),
                                 ("Editor", self.open_selected_draft, "secondary"),
                                 ("Archive", self.archive_selected_article, "secondary"),
                                 ("Delete", self.delete_selected_draft, "danger")]:
-            FlatButton(row, text, cmd, kind).pack(side="left", padx=(0, 8))
+            FlatButton(self.draft_actions, text, cmd, kind).pack(side="left", padx=(0, 8))
 
     def draft_context_menu(self, event):
         row = self.drafts_list.identify_row(event.y)
@@ -887,92 +921,104 @@ class WritingApp(tk.Tk):
         self.editor_frame = tk.Frame(self.content, bg=BG)
 
         # top bar: title + buttons
-        top = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=13)
-        top.pack(fill="x")
-        tk.Label(top, text="TITLE", bg=SURFACE, fg=MUTED,
-                 font=("Helvetica", 9, "bold")).pack(side="left")
+        self.editor_top = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=13)
+        self.editor_top.pack(fill="x")
+        self.editor_title_label = tk.Label(
+            self.editor_top, text="TITLE", bg=SURFACE, fg=MUTED,
+            font=("Helvetica", 9, "bold"))
+        self.editor_title_label.pack(side="left")
         self.title_var = tk.StringVar()
-        tk.Entry(top, textvariable=self.title_var, font=("Helvetica", 14, "bold"),
-                 bg=BG, fg=TEXT, insertbackground=NEON, relief="flat",
-                 highlightthickness=1, highlightbackground=BORDER,
-                 highlightcolor=NEON).pack(side="left", fill="x", expand=True,
-                                           padx=10, ipady=5)
-        FlatButton(top, "Save", self.save_article, "primary").pack(side="left", padx=3)
-        FlatButton(top, "Archive", self.archive_current_article).pack(side="left", padx=3)
-        FlatButton(top, "Export .txt", self.export_article).pack(side="left", padx=3)
-        FlatButton(top, "Find / Replace", self.open_find_replace).pack(side="left", padx=3)
+        self.title_entry = tk.Entry(
+            self.editor_top, textvariable=self.title_var, font=("Helvetica", 14, "bold"),
+            bg=BG, fg=TEXT, insertbackground=NEON, relief="flat",
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=NEON)
+        self.title_entry.pack(side="left", fill="x", expand=True, padx=10, ipady=5)
+        FlatButton(self.editor_top, "Save", self.save_article, "primary").pack(side="left", padx=3)
+        FlatButton(self.editor_top, "Archive", self.archive_current_article).pack(side="left", padx=3)
+        FlatButton(self.editor_top, "Export .txt", self.export_article).pack(side="left", padx=3)
+        FlatButton(self.editor_top, "Find / Replace", self.open_find_replace).pack(side="left", padx=3)
         tk.Frame(self.editor_frame, bg=NEON, height=1).pack(fill="x")
-        toolbar = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=11)
-        toolbar.pack(fill="x")
+        self.editor_toolbar = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=11)
+        self.editor_toolbar.pack(fill="x")
         for name, kind in [("Bold", "bold"), ("Italic", "italic"), ("Underline", "underline"),
                            ("Left", "left"), ("Center", "center"), ("Right", "right")]:
-            FlatButton(toolbar, name, lambda k=kind: self.apply_format(k)).pack(side="left", padx=3)
-        FlatButton(toolbar, "Grammar Check", self.check_grammar, "primary").pack(side="right", padx=3)
-        FlatButton(toolbar, "Export HTML", self.export_html).pack(side="right", padx=3)
+            FlatButton(self.editor_toolbar, name, lambda k=kind: self.apply_format(k)).pack(side="left", padx=3)
+        FlatButton(self.editor_toolbar, "Grammar Check", self.check_grammar, "primary").pack(side="right", padx=3)
+        FlatButton(self.editor_toolbar, "Export HTML", self.export_html).pack(side="right", padx=3)
 
-        recovery_bar = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=12)
-        recovery_bar.pack(fill="x")
-        tk.Label(recovery_bar, text="WORD GOAL", bg=SURFACE, fg=MUTED).pack(side="left", padx=(0, 6))
+        self.editor_recovery_bar = tk.Frame(self.editor_frame, bg=SURFACE, padx=18, pady=12)
+        self.editor_recovery_bar.pack(fill="x")
+        self.editor_goal_label = tk.Label(
+            self.editor_recovery_bar, text="WORD GOAL", bg=SURFACE, fg=MUTED)
+        self.editor_goal_label.pack(side="left", padx=(0, 6))
         self.goal_var = tk.StringVar(value="500")
-        tk.Entry(recovery_bar, textvariable=self.goal_var, width=9, bg=BG, fg=TEXT,
-                 insertbackground=NEON, relief="flat", font=("Helvetica", 11),
-                 highlightthickness=1, highlightbackground=BORDER).pack(side="left", padx=(0, 10), ipady=5)
-        FlatButton(recovery_bar, "Set Goal", self.set_word_goal).pack(side="left", padx=3)
+        self.goal_entry = tk.Entry(
+            self.editor_recovery_bar, textvariable=self.goal_var, width=9, bg=BG, fg=TEXT,
+            insertbackground=NEON, relief="flat", font=("Helvetica", 11),
+            highlightthickness=1, highlightbackground=BORDER)
+        self.goal_entry.pack(side="left", padx=(0, 10), ipady=5)
+        FlatButton(self.editor_recovery_bar, "Set Goal", self.set_word_goal).pack(side="left", padx=3)
         self.progress_var = tk.StringVar(value="Goal: —")
-        tk.Label(recovery_bar, textvariable=self.progress_var, bg=SURFACE, fg=NEON,
-                 font=("Helvetica", 10, "bold")).pack(side="left", padx=12)
-        self.goal_bar = ttk.Progressbar(recovery_bar, maximum=100, length=165,
+        self.editor_progress_label = tk.Label(
+            self.editor_recovery_bar, textvariable=self.progress_var, bg=SURFACE, fg=NEON,
+            font=("Helvetica", 10, "bold"))
+        self.editor_progress_label.pack(side="left", padx=12)
+        self.goal_bar = ttk.Progressbar(self.editor_recovery_bar, maximum=100, length=165,
                                          mode="determinate", style="Quillian.Horizontal.TProgressbar")
         ttk.Style(self).configure("Quillian.Horizontal.TProgressbar", troughcolor=BORDER,
                                    background=NEON, bordercolor=BORDER, lightcolor=NEON,
                                    darkcolor=NEON, thickness=10)
         self.goal_bar.pack(side="left", padx=(12, 16))
-        FlatButton(recovery_bar, "History", self.open_history).pack(side="right", padx=3)
-        FlatButton(recovery_bar, "Backup", self.backup_now).pack(side="right", padx=3)
+        FlatButton(self.editor_recovery_bar, "History", self.open_history).pack(side="right", padx=3)
+        FlatButton(self.editor_recovery_bar, "Backup", self.backup_now).pack(side="right", padx=3)
 
-        body = tk.Frame(self.editor_frame, bg=BG)
-        body.pack(fill="both", expand=True)
+        self.editor_body = tk.Frame(self.editor_frame, bg=BG)
+        self.editor_body.pack(fill="both", expand=True)
 
         # side panel: sections
-        side = tk.Frame(body, bg=BG, padx=18, pady=16)
-        side.pack(side="left", fill="y")
-        tk.Label(side, text="SECTIONS", bg=BG, fg=MUTED,
-                 font=("Helvetica", 9, "bold")).pack(anchor="w", pady=(0, 6))
-        self.sec_list = make_list(side, width=24)
+        self.editor_side = tk.Frame(self.editor_body, bg=BG, padx=18, pady=16)
+        self.editor_side.pack(side="left", fill="y")
+        self.editor_section_label = tk.Label(
+            self.editor_side, text="SECTIONS", bg=BG, fg=MUTED,
+            font=("Helvetica", 9, "bold"))
+        self.editor_section_label.pack(anchor="w", pady=(0, 6))
+        self.sec_list = make_list(self.editor_side, width=24)
         self.sec_list.pack(fill="y", expand=True, pady=(0, 8))
         self.sec_list.bind("<<ListboxSelect>>", self.on_section_select)
         for text, cmd in [("Add Section", self.add_section),
                           ("Rename", self.rename_section),
                           ("Move Up", lambda: self.move_section(-1)),
                           ("Move Down", lambda: self.move_section(1))]:
-            FlatButton(side, text, cmd).pack(fill="x", pady=3)
-        FlatButton(side, "Delete Section", self.delete_section, "danger").pack(fill="x", pady=3)
+            FlatButton(self.editor_side, text, cmd).pack(fill="x", pady=3)
+        FlatButton(self.editor_side, "Delete Section", self.delete_section, "danger").pack(fill="x", pady=3)
 
         # text area
-        right = tk.Frame(body, bg=BG, padx=8, pady=16)
-        right.pack(side="left", fill="both", expand=True)
-        self.sec_label = tk.Label(right, text="", bg=BG, fg=NEON,
+        self.editor_right = tk.Frame(self.editor_body, bg=BG, padx=8, pady=16)
+        self.editor_right.pack(side="left", fill="both", expand=True)
+        self.sec_label = tk.Label(self.editor_right, text="", bg=BG, fg=NEON,
                                   font=("Helvetica", 13, "bold"))
         self.sec_label.pack(anchor="w", padx=(0, 14), pady=(0, 6))
         self.count_var = tk.StringVar()
-        tk.Label(right, textvariable=self.count_var, anchor="e", bg=BG, fg=MUTED,
-                 font=("Helvetica", 9)).pack(side="bottom", fill="x", padx=(0, 14), pady=(6, 0))
-        scroll = make_scrollbar(right, None)
-        scroll.pack(side="right", fill="y", padx=(0, 14))
-        self.text = tk.Text(right, wrap="word", undo=True, font=("Georgia", 13),
+        self.editor_count_label = tk.Label(
+            self.editor_right, textvariable=self.count_var, anchor="e", bg=BG, fg=MUTED,
+            font=("Helvetica", 9))
+        self.editor_count_label.pack(side="bottom", fill="x", padx=(0, 14), pady=(6, 0))
+        self.editor_scrollbar = make_scrollbar(self.editor_right, None)
+        self.editor_scrollbar.pack(side="right", fill="y", padx=(0, 14))
+        self.text = tk.Text(self.editor_right, wrap="word", undo=True, font=("Georgia", 13),
                             bg=SURFACE, fg=TEXT, insertbackground=NEON,
                             selectbackground=TEXT_SELECTION, selectforeground=TEXT,
                             relief="flat", bd=0, padx=24, pady=20, spacing3=5,
                             highlightthickness=1, highlightbackground=BORDER,
-                            highlightcolor=NEON, yscrollcommand=scroll.set)
+                            highlightcolor=NEON, yscrollcommand=self.editor_scrollbar.set)
         self.text.tag_configure("bold", font=("Georgia", 13, "bold"))
         self.text.tag_configure("italic", font=("Georgia", 13, "italic"))
         self.text.tag_configure("underline", underline=True)
         self.text.tag_configure("center", justify="center")
         self.text.tag_configure("right", justify="right")
-        self.text.tag_configure("grammar_issue", underline=True, foreground="#FFB86B")
+        self.text.tag_configure("grammar_issue", underline=True, foreground=GRAMMAR_ISSUE)
         self.text.pack(fill="both", expand=True)
-        scroll.config(command=self.text.yview)
+        self.editor_scrollbar.config(command=self.text.yview)
         self.text.bind("<<Modified>>", self.on_text_modified)
 
     def on_text_modified(self, event=None):
